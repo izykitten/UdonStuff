@@ -1,4 +1,6 @@
 using UnityEngine;
+
+#if UNITY_EDITOR
 using UnityEditor;
 
 [CustomEditor(typeof(SlidingDoor))]
@@ -67,3 +69,4 @@ public class SlidingDoorEditor : Editor
         serializedObject.ApplyModifiedProperties();
     }
 }
+#endif

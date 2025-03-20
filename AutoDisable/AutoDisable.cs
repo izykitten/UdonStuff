@@ -1,11 +1,23 @@
-﻿#if UNITY_EDITOR
-using UnityEngine;
-using UnityEditor; // Still required for delayCall
+﻿using UnityEngine;
+#if UNITY_EDITOR
+using UnityEditor; // Required for delayCall
+#endif
 
+[AddComponentMenu("izy/AutoDisable")]
 public class AutoDisable : MonoBehaviour
 {
-    // Added option: enableDuringLightBake is true by default
+    // Properties that need to be available to AutoDisableEditor
     public bool enableDuringLightBake = true;
+    public bool enableDuringOcclusionBake = true;
+
+    // Add a boolean to control the initial active state
+    public bool startEnabled = false;
+
+    void Awake()
+    {
+        // Set the object's active state based on the startEnabled property
+        gameObject.SetActive(startEnabled);
+    }
 
     #if UNITY_EDITOR
     void OnValidate()
@@ -23,7 +35,6 @@ public class AutoDisable : MonoBehaviour
             }
         };
     }
-    #endif
 
     // Add a method to highlight the selected file
     void HighlightSelectedFile()
@@ -33,5 +44,5 @@ public class AutoDisable : MonoBehaviour
         // For example, changing the background color to indicate selection
         gameObject.GetComponent<Renderer>().material.color = Color.yellow;
     }
+    #endif
 }
-#endif

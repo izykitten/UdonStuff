@@ -23,6 +23,7 @@ public enum DoorOperationMode : int
     ProximitySensor = 1  // Change from 2 to 1 for proper sequential values
 }
 
+[AddComponentMenu("izy/SlidingDoor/SlidingDoor")]
 public class SlidingDoor : UdonSharpBehaviour
 {
     [SerializeField]
@@ -47,6 +48,7 @@ public class SlidingDoor : UdonSharpBehaviour
     
     // Flag to track if this StartOpening call came from the player trigger
     private bool openingFromTrigger = false;
+    private bool closingFromTrigger = false; // New flag to track closings triggered by sensor exit
 
     [NonSerialized]
     private DoorState doorState = DoorState.Closed;
@@ -86,12 +88,22 @@ public class SlidingDoor : UdonSharpBehaviour
             return isProximityMode;
         } 
         set { 
+            bool previousState = UseProximitySensor;
+            
             if (value) {
                 operationModeValue = (int)DoorOperationMode.ProximitySensor;
             } else {
                 operationModeValue = (int)DoorOperationMode.Normal;
+                // Reset player count when turning off proximity mode
+                playerCount = 0;
+                if (debugLogging) Debug.Log("[SlidingDoor] Proximity mode disabled - player count reset to 0");
             }
             Debug.Log("[SlidingDoor] Setting operationModeValue to " + operationModeValue + " (" + (value ? "ProximitySensor" : "Normal") + ")");
+            
+            // If proximity sensor object exists, and we're turning off proximity sensing
+            if (proximitySensorObject != null && previousState && !value) {
+                proximitySensorObject.SetActive(false);
+            }
         } 
     }
 
@@ -102,7 +114,7 @@ public class SlidingDoor : UdonSharpBehaviour
         get { return doorLockedValue != 0; } 
         set { 
             bool previousState = doorLockedValue != 0;
-            doorLockedValue = value ? 1 : 0; 
+            doorLockedValue = value ? 1 : 0;
             
             // Log the state change if it actually changed
             if (previousState != value && debugLogging)
@@ -120,18 +132,22 @@ public class SlidingDoor : UdonSharpBehaviour
         set { enableLockingSystemValue = value ? 1 : 0; }
     }
 
-    [SerializeField]
-    private bool syncLockState = false;
+    // Add flags to track pending door operations
+    private bool pendingCloseAfterOpen = false;
+    private bool pendingOpenAfterClose = false;
 
     [SerializeField]
     private GameObject proximitySensorObject;
+
+    // Add new force close flag:
+    private bool forceCloseFlag = false;
 
     // Add debugging property near the top of the class
     [SerializeField]
     private bool debugLogging = true; // Default to true while troubleshooting
 
-    [SerializeField]
-    private AnimationCurve openCloseCurve = AnimationCurve.Linear(0, 0, 1, 1);
+    // Add a new flag to force close even when locked
+    private bool bypassLockForClose = false;
 
     void Start()
     {
@@ -170,6 +186,18 @@ public class SlidingDoor : UdonSharpBehaviour
         if (proximitySensorObject != null)
         {
             proximitySensorObject.SetActive(UseProximitySensor && !DoorLocked);
+        }
+    }
+
+    public void ToggleDoor()
+    {
+        if (doorState == DoorState.Open)
+        {
+            StartClosing();
+        }
+        else if (doorState == DoorState.Closed)
+        {
+            StartOpening();
         }
     }
 
@@ -228,149 +256,151 @@ public class SlidingDoor : UdonSharpBehaviour
     // Modify _keypadClear to set forceCloseFlag before closing
     // Modify _keypadClear to bypass lock and always close
     // Modify _keypadClear to reset player count and ensure door closes
-    // Modify _keypadClear to call ForceCloseDoor with bypass flag set to true
+    // Modify _keypadClear to directly set the door state and position
+    // Fix the _keypadClear method to properly force close the door
     public void _keypadClear()
     {
-        Debug.Log("[SlidingDoor] _keypadClear: FORCING door to close with NO PROXIMITY CHECKS");
+        Debug.Log("[SlidingDoor] _keypadClear: Force closing door immediately");
+
+        // Stop any animations and reset flags
+        forceCloseFlag = true;
+        bypassLockForClose = true;
+        pendingCloseAfterOpen = false;
+        pendingOpenAfterClose = false;
         
-        // Force player count to zero FIRST, before any other operations
-        int oldCount = playerCount;
-        bool originalProximityMode = UseProximitySensor;
+        // Reset player count to prevent proximity sensor from keeping door open
         playerCount = 0;
-        Debug.Log("[SlidingDoor] _keypadClear: FORCED player count from " + oldCount + " to 0");
-        // FORCE disable proximity mode FIRST - this ensures checks are bypassed
-        UseProximitySensor = false;
-        Debug.Log("[SlidingDoor] _keypadClear: FORCED proximity mode from " + originalProximityMode + " to FALSE");
         
-        // Force player count to zero
-        playerCount = 0;
-        Debug.Log("[SlidingDoor] _keypadClear: FORCED player count from " + oldCount + " to 0");
+        // Force door to closed state
+        doorState = DoorState.Closed;
         
-        // Find and reset all proximity sensor scripts
-        if (proximitySensorObject != null)
-        {
-            // Reset all sensors in the proximity sensor object
-            DoorProximitySensor[] sensors = proximitySensorObject.GetComponentsInChildren<DoorProximitySensor>(true);
-            foreach (DoorProximitySensor sensor in sensors)
-            {
-                if (sensor != null)
-                {
-                    sensor.ForceResetPlayerCount();
-                    Debug.Log("[SlidingDoor] _keypadClear: Reset sensor " + sensor.name);
-                }
-            }
-            
-            // Deactivate the proximity sensor object IMMEDIATELY
-            proximitySensorObject.SetActive(false);
-            Debug.Log("[SlidingDoor] _keypadClear: Deactivated proximity sensor object");
-        }
+        // Directly set door position to closed
+        leftDoor.localPosition = leftClosedPos;
+        rightDoor.localPosition = rightClosedPos;
         
-        // VERIFY state before closing
-        Debug.Log("[SlidingDoor] _keypadClear: PRE-CLOSE STATE CHECK - Proximity mode: " + UseProximitySensor + ", Player count: " + playerCount);
+        // Reset timer to ensure animations start from beginning if door is used again
+        timer = 0;
         
-        // First force close door with bypass flag
-        ForceCloseDoor(true);
-        
-        // Then explicitly check state again to ensure nothing changed
-        Debug.Log("[SlidingDoor] _keypadClear: MID-CLOSE STATE CHECK - Proximity mode: " + UseProximitySensor + ", Player count: " + playerCount);
-        
-        // Call StartClosing with bypass flag explicitly set and double-check it's being called correctly
-        bool bypassFlag = true; // Explicitly define for clarity
-        Debug.Log("[SlidingDoor] _keypadClear: Calling StartClosing with bypassFlag=" + bypassFlag);
-        StartClosing(bypassFlag);
+        if (debugLogging) Debug.Log("[SlidingDoor] _keypadClear: Door forced to closed position. Player count reset to 0.");
     }
 
-    // Redesign ForceCloseDoor to close reliably without abrupt position changes
-    // Update the ForceCloseDoor method signature to accept a bypass flag
-    public void ForceCloseDoor(bool bypassProximityCheck = false)
+    void Update()
     {
-        Debug.Log("[SlidingDoor] ForceCloseDoor called - FORCING DOOR CLOSE" + (bypassProximityCheck ? " with bypass check" : ""));
-        
-        if (doorState == DoorState.Closed)
+        // Add door state debug log every few seconds
+        if (debugLogging && Time.frameCount % 300 == 0) // Log approximately every 5 seconds at 60 fps
         {
-            Debug.Log("[SlidingDoor] Door is already closed");
-            return;
+            Debug.Log($"[SlidingDoor] Current state: {doorState}, Player count: {playerCount}, Timer: {timer:F2}");
         }
-        
-        // Force player count to zero 
-        int oldCount = playerCount;
-        playerCount = 0;
-        Debug.Log("[SlidingDoor] FORCED player count from " + oldCount + " to 0");
-        
-        // Set the door to closing state
-        doorState = DoorState.Closing;
-        
-        // Play sound - replace with SafePlayAudio
-        if (closeSound != null && audioSource != null)
-        {
-            if (PlayCloseSoundInReverse)
-            {
-                float startTime = closeSound.length - 0.1f; // Start from end
-                SafePlayAudio(closeSound, startTime, -1.0f);
-            }
-            else
-            {
-                SafePlayAudio(closeSound, 0f, 1.0f);
-            }
-        }
-        
-        // Start the door closing animation
+
         if (doorState == DoorState.Opening)
         {
-            // Instead of resetting timer to 0,
-            // smoothly reverse via partial progress
-            float openingProgress = Mathf.Clamp01(timer / openCloseTime);
-            float newClosingProgress = 1f - openingProgress;
-            timer = newClosingProgress * openCloseTime;
+            UpdateDoorPosition(leftClosedPos, leftClosedPos + leftOpenOffset,
+                               rightClosedPos, rightClosedPos + rightOpenOffset, DoorState.Open);
         }
-        else
+        else if (doorState == DoorState.Closing)
         {
-            // For open doors, start closing from the beginning
-            timer = 0;
+            UpdateDoorPosition(leftClosedPos + leftOpenOffset, leftClosedPos,
+                               rightClosedPos + rightOpenOffset, rightClosedPos, DoorState.Closed);
         }
-        
-        // Removed scheduled position updates as the main Update() loop handles animation
-        
-        Debug.Log("[SlidingDoor] Started forced door closing sequence");
+
+        // Only auto-close if in proximity sensor mode and no players are detected
+        if (UseProximitySensor && doorState == DoorState.Open && playerCount == 0)
+        {
+            Debug.Log("[SlidingDoor] Auto-closing door from Update loop - no players detected");
+            StartClosing();
+        }
     }
-   
-    // Modified ForceClosePositionUpdate to ensure animation completes
-    public void ForceClosePositionUpdate()
+
+    // Fix the StartOpening method to properly handle trigger-based opening
+    // Fix the StartOpening method to immediately reverse closing doors
+    // Fix the StartOpening method to sync audio with position
+    // Improve StartOpening method for smoother reversals
+    public void StartOpening()
     {
+        bool wasOpeningFromTrigger = openingFromTrigger;
+        bool isProximityMode = UseProximitySensor;
+        openingFromTrigger = false;
+
+        if (EnableLockingSystem && DoorLocked)
+        {
+            Debug.Log("[SlidingDoor] Cannot open door: Door is locked");
+            return;
+        }
+        if (isProximityMode && !wasOpeningFromTrigger && doorState == DoorState.Closed)
+        {
+            Debug.Log("[SlidingDoor] Door opening blocked - using proximity sensor mode and not triggered by player entry");
+            return;
+        }
+        if (doorState == DoorState.Opening || doorState == DoorState.Open)
+        {
+            Debug.Log("[SlidingDoor] Door is already opening or open");
+            return;
+        }
+        // Smooth reversal when the door is closing
         if (doorState == DoorState.Closing)
         {
-            // Don't modify the timer, just ensure animation progresses
-            UpdateDoorPosition(leftClosedPos + leftOpenOffset, leftClosedPos,
-                              rightClosedPos + rightOpenOffset, rightClosedPos, DoorState.Closed);
+            Debug.Log("[SlidingDoor] Reversing closing door to opening");
+            pendingOpenAfterClose = false;
             
-            Debug.Log("[SlidingDoor] Force-updating door closing position");
+            // Calculate current progress and convert it for opening direction
+            float closingProgress = Mathf.Clamp01(timer / openCloseTime);
+            float newOpeningProgress = 1.0f - closingProgress; // Inverse progress
             
-            // If the door is almost closed, finish the animation
-            if (timer >= openCloseTime * 0.9f)
+            doorState = DoorState.Opening;
+            
+            // Set timer to match current position
+            timer = newOpeningProgress * openCloseTime;
+            
+            if (openSound != null && audioSource != null)
             {
-                leftDoor.localPosition = leftClosedPos;
-                rightDoor.localPosition = rightClosedPos;
-                doorState = DoorState.Closed;
-                Debug.Log("[SlidingDoor] Door closing complete");
+                audioSource.PlayOneShot(openSound, Mathf.Min(0.8f, 1.0f - closingProgress));
             }
+            return;
         }
+        pendingCloseAfterOpen = false;
+        doorState = DoorState.Opening;
+        timer = 0;
+        if (openSound != null && audioSource != null)
+        {
+            audioSource.PlayOneShot(openSound);
+        }
+        Debug.Log("[SlidingDoor] Door StartOpening called - Door is " + (DoorLocked ? "locked" : "unlocked") + ", Proximity: " + isProximityMode + ", FromTrigger: " + wasOpeningFromTrigger + ", State: " + doorState);
     }
-    
-    // Add a flag to the StartClosing method to optionally bypass proximity checks
-    public void StartClosing(bool bypassProximityCheck = false)
+
+    // Update StartClosing for consistency
+    // Update StartClosing to not close if players are present in proximity sensor
+    // Update StartClosing to reverse the opening door animation smoothly
+    // Update StartClosing to sync audio with position
+    // Improve StartClosing for smoother reversals
+    // Modify StartClosing to check for bypassing lock
+    // Modify StartClosing to log whether the force close flag is working
+    public void StartClosing()
     {
-        Debug.Log("[SlidingDoor] StartClosing called - playerCount: " + playerCount + ", bypassCheck: " + bypassProximityCheck);
+        Debug.Log("[SlidingDoor] StartClosing called - playerCount: " + playerCount + ", forceCloseFlag: " + forceCloseFlag);
         
-        // Remove or comment out the condition that prevents closing when players are still in proximity:
-        // if (UseProximitySensor && playerCount > 0 && !bypassProximityCheck)
-        // {
-        //     Debug.Log("[SlidingDoor] Not closing door - players still in proximity: " + playerCount);
-        //     return;
-        // }
+        // Skip the player count check if we're forcing a close
+        if (UseProximitySensor && playerCount > 0 && !forceCloseFlag)
+        {
+            Debug.Log("[SlidingDoor] Not closing door - players still in proximity: " + playerCount);
+            return;
+        }
+        else if (forceCloseFlag)
+        {
+            Debug.Log("[SlidingDoor] Force closing door regardless of player count: " + playerCount);
+        }
+        
+        // Reset bypass flag after sending network event
+        bool wasBypassingLock = bypassLockForClose;
+        bypassLockForClose = false;
+        
+        // Check if force close is active for logging
+        bool wasForceClose = forceCloseFlag;
         
         if (doorState == DoorState.Closing || doorState == DoorState.Closed)
         {
-            Debug.Log("[SlidingDoor] Door is already closing or closed");
+            Debug.Log("[SlidingDoor] Door is already closing or closed (force: " + wasForceClose + ")");
+            // Reset the force flag even in this case
+            forceCloseFlag = false;
             return;
         }
         
@@ -378,6 +408,7 @@ public class SlidingDoor : UdonSharpBehaviour
         if (doorState == DoorState.Opening)
         {
             Debug.Log("[SlidingDoor] Reversing opening door to close");
+            pendingCloseAfterOpen = false;
             
             // Calculate current progress and convert it for closing direction
             float openingProgress = Mathf.Clamp01(timer / openCloseTime);
@@ -388,105 +419,196 @@ public class SlidingDoor : UdonSharpBehaviour
             // Set timer to match current position
             timer = newClosingProgress * openCloseTime;
             
-            // Replace direct audio manipulation with SafePlayAudio
             if (closeSound != null && audioSource != null)
             {
-                float startTime = PlayCloseSoundInReverse ? 
-                    Mathf.Min(closeSound.length - 0.1f, closeSound.length * newClosingProgress) :
-                    Mathf.Max(0f, closeSound.length * (1 - newClosingProgress));
-                    
-                float pitch = PlayCloseSoundInReverse ? -1.0f : 1.0f;
-                
-                // Use SafePlayAudio for consistent pitch handling
-                SafePlayAudio(closeSound, startTime, pitch);
+                audioSource.PlayOneShot(closeSound, Mathf.Min(0.8f, 1.0f - openingProgress));
             }
             return;
         }
-        
-        Debug.Log("[SlidingDoor] Starting to close door");
+        pendingOpenAfterClose = false;
+        if (debugLogging) Debug.Log("[SlidingDoor] Starting to close door" + (wasBypassingLock ? " (bypassing lock)" : ""));
         
         doorState = DoorState.Closing;
         timer = 0;
-
+        
+        // Reset the force flag
+        forceCloseFlag = false;
+        
         if (closeSound != null && audioSource != null)
         {
             if (PlayCloseSoundInReverse)
             {
-                // Use the SafePlayAudio method with reverse pitch
-                float safeTime = Mathf.Clamp(closeSound.length - 0.1f, 0f, closeSound.length);
-                SafePlayAudio(closeSound, safeTime, -1.0f);
+                audioSource.pitch = -1;
+                audioSource.PlayOneShot(closeSound);
+                audioSource.pitch = 1;
             }
             else
             {
-                // Use the SafePlayAudio method with normal pitch
-                SafePlayAudio(closeSound, 0f);
+                audioSource.PlayOneShot(closeSound);
             }
         }
     }
-    
+
+    // Fix the OnPlayerTriggerEnter to better handle proximity detection
+    public override void OnPlayerTriggerEnter(VRCPlayerApi player)
+    {
+        // Always log this regardless of debug setting
+        Debug.Log("[SlidingDoor] OnPlayerTriggerEnter called! Player: " + (player != null ? player.displayName : "NULL"));
+        // Important: Log the GameObject that owns this collider
+        Debug.Log("[SlidingDoor] Trigger source GameObject: " + gameObject.name);
+
+        if (player == null)
+        {
+            Debug.LogError("[SlidingDoor] OnPlayerTriggerEnter called with null player");
+            return;
+        }
+        bool isProximityMode = UseProximitySensor;
+        if (debugLogging)
+        {
+            Debug.Log("[SlidingDoor] Trigger ENTER: " + player.displayName + 
+                      " (Local: " + player.isLocal + 
+                      ") Proximity mode: " + isProximityMode + 
+                      ", OperationMode: " + OperationMode + 
+                      ", Current count: " + playerCount);
+        }
+
+        if (isProximityMode)
+        {
+            playerCount++;
+            
+            if (doorState == DoorState.Closed && (!EnableLockingSystem || !DoorLocked))
+            {
+                openingFromTrigger = true; // Set flag to indicate opening from trigger
+                StartOpening();
+                
+                if (debugLogging) Debug.Log("[SlidingDoor] Proximity trigger opening door. Player count: " + playerCount);
+            }
+        }
+    }
+
+    public override void OnPlayerTriggerExit(VRCPlayerApi player)
+    {
+        Debug.Log("[SlidingDoor] OnPlayerTriggerExit called!"); // Check if the function is called
+
+        if (player == null)
+        {
+            Debug.LogError("[SlidingDoor] OnPlayerTriggerExit called with null player");
+            return;
+        }
+        bool isProximityMode = UseProximitySensor;
+        if (debugLogging)
+        {
+            Debug.Log("[SlidingDoor] Trigger EXIT: " + player.displayName + 
+                      " (Local: " + player.isLocal + 
+                      ") Proximity mode: " + isProximityMode + 
+                      ", OperationMode: " + OperationMode + 
+                      ", Current count: " + playerCount);
+        }
+
+        if (!isProximityMode)
+        {
+            return;
+        }
+        
+        playerCount = Mathf.Max(0, playerCount - 1);
+        
+        // Always log the player count change regardless of debug setting
+        Debug.Log("[SlidingDoor] Player exited - player count now: " + playerCount);
+        
+        // Combine conditions so the door closes if it's open or still opening
+        if ((doorState == DoorState.Open || doorState == DoorState.Opening) && playerCount == 0)
+        {
+            Debug.Log("[SlidingDoor] Exit detected. Door will close immediately.");
+            StartClosingFromTrigger();
+        }
+        if (doorState == DoorState.Open && playerCount == 0)
+        {
+            Debug.Log("[SlidingDoor] Exit detected, door is fully open - closing now.");
+            StartClosingFromTrigger();
+        }
+        else if (doorState == DoorState.Opening && playerCount == 0)
+        {
+            Debug.Log("[SlidingDoor] Exit detected while door is opening - queue close after open finishes.");
+            pendingCloseAfterOpen = true;
+        }
+    }
+
+    // Add a simple method to call StartClosing from spam detection
+    public void DoClose()
+    {
+        if (playerCount == 0 && (doorState == DoorState.Open || doorState == DoorState.Opening))
+        {
+            StartClosing();
+        }
+    }
+
     // Update the UpdateDoorPosition method to handle pending operations
     // Improve the animation update method with smoother interpolation
-    // Completely redesigned UpdateDoorPosition for more reliable animation
-    // Modify UpdateDoorPosition to use consistent timing for both opening and closing
     private void UpdateDoorPosition(Vector3 leftStart, Vector3 leftTarget, Vector3 rightStart, Vector3 rightTarget, DoorState finalState)
     {
         timer += Time.deltaTime;
         
-        // Calculate progress with a limit
+        // Use a smoother easing function instead of linear
         float t = Mathf.Clamp01(timer / openCloseTime);
+        float smoothT = SmoothStep(t);
         
-        // Use the provided curve to adjust interpolation
-        float curveValue = openCloseCurve.Evaluate(t);
-        
-        // Apply the position changes
-        leftDoor.localPosition = Vector3.Lerp(leftStart, leftTarget, curveValue);
-        rightDoor.localPosition = Vector3.Lerp(rightStart, rightTarget, curveValue);
-        
-        // Sync audio playback with door's progress - without try/catch which isn't supported in UdonSharp
-        if(audioSource != null && audioSource.isPlaying && audioSource.clip != null)
-        {
-            if(doorState == DoorState.Opening && audioSource.clip == openSound && openSound != null)
-            {
-                float safePosition = Mathf.Clamp(curveValue * openSound.length, 0f, openSound.length - 0.01f);
-                if (safePosition >= 0f && safePosition < openSound.length)
-                {
-                    audioSource.time = safePosition;
-                }
-            }
-            else if(doorState == DoorState.Closing && audioSource.clip == closeSound && closeSound != null)
-            {
-                // For closing, audio plays in reverse (simulate by time progress reversed)
-                float safePosition = Mathf.Clamp(closeSound.length * (1 - curveValue), 0f, closeSound.length - 0.01f);
-                if (safePosition >= 0f && safePosition < closeSound.length)
-                {
-                    audioSource.time = safePosition;
-                }
-            }
-        }
-        
-        // Log door positions to help with debugging
-        if (debugLogging && (t == 0f || t >= 0.99f)) 
-        {        
-            Debug.Log($"[SlidingDoor] Door position update: t={t:F2}, state={doorState}, Left={leftDoor.localPosition}, Right={rightDoor.localPosition}");
-        }
+        // Use the smooth interpolation for door movement
+        leftDoor.localPosition = Vector3.Lerp(leftStart, leftTarget, smoothT);
+        rightDoor.localPosition = Vector3.Lerp(rightStart, rightTarget, smoothT);
 
-        // If animation is complete
+        // If we've reached the end of the animation
         if (t >= 1f)
         {
             doorState = finalState;
-            Debug.Log($"[SlidingDoor] Door animation complete: new state={finalState}, elapsed time={timer:F2}s");
             
-            // Set exact final positions to avoid floating point issues
-            leftDoor.localPosition = leftTarget;
-            rightDoor.localPosition = rightTarget;
-            
-            if(finalState == DoorState.Closed && audioSource != null && audioSource.clip == closeSound)
+            // Check for pending operations
+            if (doorState == DoorState.Open && pendingCloseAfterOpen)
             {
-                audioSource.Stop();
+                if (debugLogging) Debug.Log("[SlidingDoor] Door finished opening - executing pending close operation");
+                pendingCloseAfterOpen = false;
+                StartClosing();
             }
-            else if(finalState == DoorState.Open && audioSource != null && audioSource.clip == openSound)
+            else if (doorState == DoorState.Closed && pendingOpenAfterClose)
             {
-                audioSource.Stop();
+                if (debugLogging) Debug.Log("[SlidingDoor] Door finished closing - executing pending open operation");
+                pendingOpenAfterClose = false;
+                openingFromTrigger = false; // Not opening from trigger in this case
+                StartOpening();
+            }
+        }
+    }
+
+    // Add a custom smoothing function for better animation
+    private float SmoothStep(float t)
+    {
+        // Smoother than linear interpolation: 3t² - 2t³
+        return t * t * (3f - 2f * t);
+    }
+
+    private bool CheckLockingConditions()
+    {
+        return !DoorLocked;
+    }
+
+    private void RefreshLockState()
+    {
+        if (EnableLockingSystem)
+        {
+            if (CheckLockingConditions())
+            {
+                // Only automatically open the door if not in proximity sensor mode
+                if (doorState == DoorState.Closed && !UseProximitySensor)
+                {
+                    openingFromTrigger = false; // Not opening from trigger
+                    StartOpening();
+                }
+            }
+            else
+            {
+                if (doorState == DoorState.Open)
+                {
+                    StartClosing();
+                }
             }
         }
     }
@@ -525,20 +647,29 @@ public class SlidingDoor : UdonSharpBehaviour
                 proximitySensorObject.SetActive(shouldBeActive);
             }
         }
-        
-        // Ensure lock UI or indicators are updated
     }
-    
+
     // Add debug logging to LockDoor
     public void LockDoor()
     {
         DoorLocked = true;
+        
         if (proximitySensorObject != null)
         {
             bool shouldBeActive = UseProximitySensor && !DoorLocked;
             proximitySensorObject.SetActive(shouldBeActive);
             Debug.Log("[SlidingDoor] Proximity sensor object active state set to: " + shouldBeActive);
         }
+    }
+
+    public void DoUnlockDoor()
+    {
+        UnlockDoor();
+    }
+    
+    public void DoLockDoor()
+    {
+        LockDoor();
     }
 
     // Manually expose OpenDoor method for UI buttons and other interactions
@@ -551,7 +682,7 @@ public class SlidingDoor : UdonSharpBehaviour
             Debug.Log("[SlidingDoor] Cannot open - door is locked");
             return;
         }
-        
+
         if (doorState == DoorState.Closed || doorState == DoorState.Closing)
         {
             doorState = DoorState.Opening;
@@ -572,7 +703,7 @@ public class SlidingDoor : UdonSharpBehaviour
     {
         if (debugLogging) Debug.Log("CloseDoor method called");
         // Only check player count if not forcing a close
-        if (UseProximitySensor)
+        if (UseProximitySensor && !forceCloseFlag)
         {
             if (proximitySensorObject != null)
             {
@@ -591,24 +722,199 @@ public class SlidingDoor : UdonSharpBehaviour
             }
         }
         
+        // Reset the force flag after attempting to close
+        forceCloseFlag = false;
+        
         // Force the door to close no matter what state it's in (unless already closed)
         if (doorState != DoorState.Closed)
         {
             StartClosing();
         }
     }
-    
+
     // Add method to toggle proximity mode for debugging
     public void ToggleProximityMode()
     {
         bool currentMode = UseProximitySensor;
         UseProximitySensor = !currentMode;
+        
+        // If we just turned off proximity mode, make sure player count is reset
+        if (currentMode && !UseProximitySensor) {
+            playerCount = 0;
+            if (debugLogging) Debug.Log("[SlidingDoor] Toggled proximity mode OFF - player count reset to 0");
+        }
+        
         if (debugLogging) Debug.Log("[SlidingDoor] Toggled proximity mode from " + currentMode + " to " + UseProximitySensor);
+    }
+
+    // Add these new public methods for the proximity sensor to call
+    // Modify PlayerEnteredProximity to reverse the door if it's closing
+    public void PlayerEnteredProximity(VRCPlayerApi player)
+    {
+        if (player == null)
+        {
+            Debug.LogError("[SlidingDoor] Null player passed to PlayerEnteredProximity");
+            return;
+        }
+        bool isProximityMode = UseProximitySensor;
+        if (debugLogging)
+        {
+            Debug.Log("[SlidingDoor] PlayerEnteredProximity: " + player.displayName +
+                      ", Proximity mode: " + isProximityMode + ", Current count: " + playerCount);
+        }
+        if (isProximityMode)
+        {
+            playerCount++;
+            if ((doorState == DoorState.Closing || doorState == DoorState.Closed) &&
+                (!EnableLockingSystem || !DoorLocked))
+            {
+                openingFromTrigger = true;
+                StartOpening();
+            }
+        }
+        else
+        {
+            Debug.Log("[SlidingDoor] PlayerEnteredProximity called, but proximity mode is disabled.");
+        }
+    }
+
+    public void PlayerExitedProximity(VRCPlayerApi player)
+    {
+        if (player == null)
+        {
+            Debug.LogError("[SlidingDoor] Null player passed to PlayerExitedProximity");
+            return;
+        }
+        bool isProximityMode = UseProximitySensor;
+        if (debugLogging)
+        {
+            Debug.Log("[SlidingDoor] PlayerExitedProximity: " + player.displayName +
+                      ", Proximity mode: " + isProximityMode + ", Current count: " + playerCount);
+        }
+        if (!isProximityMode)
+        {
+            Debug.Log("[SlidingDoor] PlayerExitedProximity called, but proximity mode is disabled.");
+            return;
+        }
+        playerCount = Mathf.Max(0, playerCount - 1);
+        Debug.Log("[SlidingDoor] Player count after exit: " + playerCount);
+        if ((doorState == DoorState.Open || doorState == DoorState.Opening) && playerCount == 0)
+        {
+            Debug.Log("[SlidingDoor] No more players nearby, closing door immediately.");
+            ForceCloseNow();
+        }
+        else
+        {
+            Debug.Log("[SlidingDoor] Door remains open/closing due to remaining players.");
+        }
+        if (doorState == DoorState.Open && playerCount == 0)
+        {
+            Debug.Log("[SlidingDoor] No more players nearby - door fully open, close now.");
+            ForceCloseNow();
+        }
+        else if (doorState == DoorState.Opening && playerCount == 0)
+        {
+            Debug.Log("[SlidingDoor] No more players nearby - queue close after open finishes.");
+            pendingCloseAfterOpen = true;
+        }
+    }
+
+    // Add a new method to force close the door immediately
+    public void ForceCloseNow()
+    {
+        Debug.Log("[SlidingDoor] ForceCloseNow called - forcing door to close");
+        
+        // Set force close flag to override player count checks
+        forceCloseFlag = true;
+        
+        // Check if door is still open/opening before closing
+        if (doorState == DoorState.Open || doorState == DoorState.Opening)
+        {
+            Debug.Log("[SlidingDoor] Door is open/opening, calling StartClosing");
+            StartClosing();
+        }
+        else
+        {
+            Debug.Log("[SlidingDoor] Door already closing/closed, current state: " + doorState);
+        }
+        
+        // Reset force flag after attempting to close
+        forceCloseFlag = false;
+    }
+
+    // Add new StartClosingFromTrigger method that mirrors the smooth reversal behavior
+    // Improve StartClosingFromTrigger for smoother reversals
+    // Fix StartClosingFromTrigger to better handle closings
+    public void StartClosingFromTrigger()
+    {
+        closingFromTrigger = true;
+        Debug.Log("[SlidingDoor] StartClosingFromTrigger called - playerCount: " + playerCount);
+
+        // Always set forceCloseFlag to true to bypass player count checks
+
+        forceCloseFlag = true;
+
+        // Always perform the smooth reversal for opening doors when called from trigger
+        if (doorState == DoorState.Opening)
+        {
+            Debug.Log("[SlidingDoor] Smoothly reversing opening door to closing");
+            
+            // Calculate current progress and convert it for closing direction
+            float openingProgress = Mathf.Clamp01(timer / openCloseTime);
+            float newClosingProgress = 1.0f - openingProgress; // Inverse progress
+            
+            pendingCloseAfterOpen = false;
+            doorState = DoorState.Closing;
+            
+            // Set timer for new direction based on current position
+            timer = newClosingProgress * openCloseTime;
+            
+            // Play sound with intensity based on progress
+            if (closeSound != null && audioSource != null)
+            {
+                float volume = Mathf.Max(0.4f, newClosingProgress);
+                audioSource.PlayOneShot(closeSound, volume);
+            }
+            
+            closingFromTrigger = false;
+            forceCloseFlag = false; // Reset the flag
+            return;
+        }
+
+        // For all other cases, delegate to normal closing
+        closingFromTrigger = false;
+        StartClosing();
+        forceCloseFlag = false; // Reset the flag
+    }
+
+    public void ForceCloseIfEmpty()
+    {
+        // Double-check player count to avoid false closes
+        if (playerCount == 0)
+        {
+            Debug.Log("[SlidingDoor] Forcing door to close after player exit delay");
+            
+            if (doorState == DoorState.Open || doorState == DoorState.Opening)
+            {
+                StartClosingFromTrigger();
+            }
+        }
+        else
+        {
+            Debug.Log("[SlidingDoor] Skipping forced close - players present: " + playerCount);
+        }
+    }
+
+    public void ResetPlayerCount()
+    {
+        playerCount = 0;
+        Debug.Log("[SlidingDoor] Player count manually reset to zero");
     }
 
     // Add this NEW method that combines all logic for sensor player entry
     public void TriggerSensorPlayerEntered(VRCPlayerApi player)
     {
+        // Always log this call
         Debug.Log("[SlidingDoor] TriggerSensorPlayerEntered called for: " + (player != null ? player.displayName : "NULL"));
         
         if (player == null) return;
@@ -620,99 +926,35 @@ public class SlidingDoor : UdonSharpBehaviour
             return;
         }
         
-        // Force proximity mode
+        // Force proximity mode to be true (for safety)
         UseProximitySensor = true;
         
         // Increment player count
         playerCount++;
         Debug.Log("[SlidingDoor] Player count now: " + playerCount);
         
-        // If door is not already open, force it open with visual feedback
-        if (doorState != DoorState.Open)
+        // Open the door directly if it's closed or closing
+        if (doorState == DoorState.Closed || doorState == DoorState.Closing)
         {
-            // Replace ForceOpenDoor with StartOpening
-            StartOpening();
-        }
-    }
-    
-    // Make sure all animations start with a clean timer
-    public void StartOpening()
-    {
-        bool wasOpeningFromTrigger = openingFromTrigger;
-        bool isProximityMode = UseProximitySensor;
-        openingFromTrigger = false;
-        if (EnableLockingSystem && DoorLocked)
-        {
-            Debug.Log("[SlidingDoor] Cannot open door: Door is locked");
-            return;
-        }
-        // Removed the check that prevented opening if not triggered
-        // if (isProximityMode && !wasOpeningFromTrigger && doorState == DoorState.Closed)
-        // {
-        //     Debug.Log("[SlidingDoor] Door opening blocked - using proximity sensor mode and not triggered by player entry");
-        //     return;
-        // }
-        
-        if (doorState == DoorState.Opening || doorState == DoorState.Open)
-        {
-            Debug.Log("[SlidingDoor] Door is already opening or open");
-            return;
-        }
-        if (doorState == DoorState.Closing)
-        {
-            Debug.Log("[SlidingDoor] Reversing closing door to opening");
+            openingFromTrigger = true;
             
-            float closingProgress = Mathf.Clamp01(timer / openCloseTime);
-            float newOpeningProgress = 1.0f - closingProgress;
             doorState = DoorState.Opening;
-            timer = newOpeningProgress * openCloseTime;
+            timer = 0;
+            
             if (openSound != null && audioSource != null)
             {
-                // Instead of PlayOneShot, set clip for sync
-                float safeTime = Mathf.Clamp(newOpeningProgress * openSound.length, 0f, openSound.length - 0.1f);
-                SafePlayAudio(openSound, safeTime);
+                audioSource.PlayOneShot(openSound);
             }
-            return;
+            
+            Debug.Log("[SlidingDoor] DIRECTLY opening door for player: " + player.displayName);
         }
-        doorState = DoorState.Opening;
-        // Before setting timer = 0, log the current timer value
-        if (debugLogging) Debug.Log("[SlidingDoor] Opening door with timer reset from " + timer);
-        // Always ensure timer is completely reset for consistent timing
-        timer = 0;
-        if (openSound != null && audioSource != null)
-        {
-            // Replace with safe play
-            SafePlayAudio(openSound, 0f);
-        }
-        Debug.Log("[SlidingDoor] Door StartOpening called - Door is " + (DoorLocked ? "locked" : "unlocked") + ", Proximity: " + isProximityMode + ", FromTrigger: " + wasOpeningFromTrigger + ", State: " + doorState);
     }
 
-    // Improved Update method to ensure animation processing
-    void Update()
-    {
-        // Process door animations with higher priority
-        if (doorState == DoorState.Opening)
-        {
-            UpdateDoorPosition(leftClosedPos, leftClosedPos + leftOpenOffset,
-                               rightClosedPos, rightClosedPos + rightOpenOffset, DoorState.Open);
-        }
-        else if (doorState == DoorState.Closing)
-        {
-            UpdateDoorPosition(leftClosedPos + leftOpenOffset, leftClosedPos,
-                               rightClosedPos + rightOpenOffset, rightClosedPos, DoorState.Closed);
-        }
-        
-        // Auto-close logic for proximity sensor mode
-        if (UseProximitySensor && doorState == DoorState.Open && playerCount == 0)
-        {
-            StartClosing();
-        }
-    }
-    
-    // Add this method to handle player exits through the proximity sensor
-    // Modify TriggerSensorPlayerExited to ensure door close timing is consistent
+    // Add this NEW method that combines all logic for sensor player exit
+    // Fix the TriggerSensorPlayerExited method to ensure the door closes
     public void TriggerSensorPlayerExited(VRCPlayerApi player)
     {
+        // Always log this call
         Debug.Log("[SlidingDoor] TriggerSensorPlayerExited called for: " + (player != null ? player.displayName : "NULL"));
         
         if (player == null) return;
@@ -721,83 +963,27 @@ public class SlidingDoor : UdonSharpBehaviour
         playerCount = Mathf.Max(0, playerCount - 1);
         Debug.Log("[SlidingDoor] Player count now: " + playerCount);
         
-        // If no players left, schedule closing - use consistent delay
+        // If no players left, close the door immediately or with slight delay
         if (playerCount == 0 && (doorState == DoorState.Open || doorState == DoorState.Opening))
         {
-            // Use a fixed 0.5 second delay before closing for consistency
-            SendCustomEventDelayedSeconds(nameof(StartClosingFromTrigger), 0.5f);
-            Debug.Log("[SlidingDoor] Scheduled door to close in 0.5s, animation will take " + openCloseTime + " seconds");
+            // Log that we're scheduling a close
+            Debug.Log("[SlidingDoor] No players detected - scheduling door close");
+            
+            // Use a very short delay for more reliable operation
+            SendCustomEventDelayedSeconds(nameof(ForceCloseNow), 0.2f);
         }
-    }
-    
-    // Add new StartClosingFromTrigger method that mirrors the smooth reversal behavior
-    // Improve StartClosingFromTrigger for smoother reversals
-    // Fix StartClosingFromTrigger to use SafePlayAudio with proper pitch handling
-    public void StartClosingFromTrigger()
-    {
-        Debug.Log("[SlidingDoor] StartClosingFromTrigger called - playerCount: " + playerCount);
-        
-        // Always perform the smooth reversal for opening doors when called from trigger
-        if (doorState == DoorState.Opening)
-        {
-            Debug.Log("[SlidingDoor] Smoothly reversing opening door to closing");
-            
-            // Calculate current progress and convert it for closing direction
-            float openingProgress = Mathf.Clamp01(timer / openCloseTime);
-            float newClosingProgress = 1.0f - openingProgress; // Inverse progress
-            
-            doorState = DoorState.Closing;
-            
-            // Set timer for new direction based on current position
-            timer = newClosingProgress * openCloseTime;
-            
-            // Use SafePlayAudio instead of PlayOneShot for better pitch control
-            if (closeSound != null && audioSource != null)
-            {
-                float volume = Mathf.Max(0.4f, newClosingProgress);
-                float startTime = PlayCloseSoundInReverse ? 
-                    Mathf.Min(closeSound.length - 0.1f, closeSound.length * newClosingProgress) :
-                    Mathf.Max(0f, closeSound.length * (1 - newClosingProgress));
-                    
-                float pitch = PlayCloseSoundInReverse ? -1.0f : 1.0f;
-                
-                // Use our SafePlayAudio method with correct pitch
-                SafePlayAudio(closeSound, startTime, pitch);
-            }
-            return;
-        }
-        
-        // For all other cases, delegate to normal closing
-        StartClosing(true);
-    }
-    
-    public void ResetPlayerCount()
-    {
-        playerCount = 0;
-        Debug.Log("[SlidingDoor] Player count manually reset to zero");
     }
 
-    // Add a helper method to safely play audio and avoid seek position errors
-    private void SafePlayAudio(AudioClip clip, float startTime = 0f, float pitch = 1.0f)
+    // Add a handler for when the proximity sensor object is deactivated
+    public void OnProximitySensorDeactivated()
     {
-        if (audioSource == null || clip == null) return;
+        // Reset player count when the sensor is disabled
+        playerCount = 0;
+        if (debugLogging) Debug.Log("[SlidingDoor] Proximity sensor deactivated - player count reset to 0");
         
-        // Ensure clip is valid and has length
-        if (clip.length <= 0.01f) return;
-        
-        // Safety bounds check
-        float safeStartTime = Mathf.Clamp(startTime, 0f, Mathf.Max(0f, clip.length - 0.1f));
-        
-        audioSource.clip = clip;
-        audioSource.pitch = pitch;
-        
-        // Set time BEFORE playing
-        audioSource.time = safeStartTime;
-        
-        // Stop any existing playback first
-        audioSource.Stop();
-        
-        // Now safely play
-        audioSource.Play();
+        // If door is open, close it
+        if (doorState == DoorState.Open || doorState == DoorState.Opening) {
+            ForceCloseNow();
+        }
     }
 }
