@@ -6,89 +6,111 @@ using VRC.Udon;
 public class DoorProximitySensor : UdonSharpBehaviour
 {
     public SlidingDoor doorController;
-    public bool debugLogging = false;
+    public bool debugLogging = true;
     
     void Start()
     {
-        // Make sure any collider on this object is a trigger
         Collider col = GetComponent<Collider>();
         if (col == null)
         {
-            Debug.LogError("[DoorProximitySensor] No collider found! Please add a collider to this GameObject.");
+            Debug.LogError("[DoorProximitySensor] No collider found! Please add a collider.");
             return;
         }
         
-        if (!col.isTrigger)
-        {
-            col.isTrigger = true;
-            Debug.Log("[DoorProximitySensor] Converted collider to trigger");
-        }
+        col.isTrigger = true;
+        col.enabled = true;
         
-        // Check for rigidbody (needed for reliable trigger detection)
-        Rigidbody rb = GetComponent<Rigidbody>();
-        if (rb == null)
-        {
-            Debug.LogWarning("[DoorProximitySensor] No Rigidbody component. For reliable trigger detection, add a Rigidbody with isKinematic=true and useGravity=false");
-        }
-        
-        Debug.Log("[DoorProximitySensor] Started and configured");
-
-        // Check for players already inside the collider
         if (doorController != null)
         {
-            SendCustomEventDelayedSeconds(nameof(DelayedCheckForPlayers), 0.5f);
+            // Make sure the door is set to proximity mode
+            doorController.UseProximitySensor = true;
+            Debug.Log("[DoorProximitySensor] Connected to door and set proximity mode");
+
+            // Check for players already inside the collider
+            CheckForPlayersAlreadyInside();
+        }
+        else
+        {
+            Debug.LogError("[DoorProximitySensor] NO DOOR CONTROLLER ASSIGNED!");
         }
     }
-    
-    // Special method to handle case where players are already inside when the sensor starts
-    private void CheckForPlayersAlreadyInCollider()
+
+    private void CheckForPlayersAlreadyInside()
     {
-        Debug.Log("[DoorProximitySensor] Checking for players already in collider...");
-        
         VRCPlayerApi[] players = new VRCPlayerApi[VRCPlayerApi.GetPlayerCount()];
         VRCPlayerApi.GetPlayers(players);
-        
+
         Collider col = GetComponent<Collider>();
         if (col == null) return;
-        
+
         foreach (VRCPlayerApi player in players)
         {
             if (player != null && col.bounds.Contains(player.GetPosition()))
             {
-                Debug.Log("[DoorProximitySensor] Found player already in collider: " + player.displayName);
-                doorController.PlayerEnteredProximity(player);
+                if (debugLogging)
+                {
+                    Debug.Log($"[DoorProximitySensor] Player already inside: {player.displayName}");
+                }
+                doorController.TriggerSensorPlayerEntered(player);
             }
         }
     }
 
-    public void DelayedCheckForPlayers()
-    {
-        CheckForPlayersAlreadyInCollider();
-    }
-    
     public override void OnPlayerTriggerEnter(VRCPlayerApi player)
     {
-        if (debugLogging)
+        if (doorController == null || player == null) 
         {
-            Debug.Log("[DoorProximitySensor] Player entered: " + player.displayName);
+            Debug.LogError("[DoorProximitySensor] Missing references in OnPlayerTriggerEnter");
+            return;
         }
         
-        if (doorController != null && player != null)
+        if (debugLogging)
         {
-            doorController.PlayerEnteredProximity(player);
+            Debug.Log($"[DoorProximitySensor] Player entered: {player.displayName}");
         }
+        
+        // Only call ONE method - let the door handle all the logic
+        doorController.TriggerSensorPlayerEntered(player);
     }
     
     public override void OnPlayerTriggerExit(VRCPlayerApi player)
     {
-        if (debugLogging)
+        if (doorController == null || player == null) 
         {
-            Debug.Log("[DoorProximitySensor] Player exited: " + player.displayName);
+            Debug.LogError("[DoorProximitySensor] Missing references in OnPlayerTriggerExit");
+            return;
         }
         
-        if (doorController != null && player != null)
+        if (debugLogging)
         {
-            doorController.PlayerExitedProximity(player);
+            Debug.Log($"[DoorProximitySensor] Player exited: {player.displayName}");
         }
+        
+        // Only call ONE method - let the door handle all the logic
+        doorController.TriggerSensorPlayerExited(player);
+    }
+    
+    // Simple manual control method
+    public void ForceTriggerDoor(bool open)
+    {
+        if (doorController == null) return;
+        if (open)
+            doorController.OpenDoor();
+        else
+            doorController.CloseDoor();
+    }
+
+    // Add new method to forcibly reset player detection state
+    public void ForceResetPlayerCount()
+    {
+        if (doorController == null) return;
+        
+        if (debugLogging)
+        {
+            Debug.Log("[DoorProximitySensor] Force-resetting player count");
+        }
+        
+        // Call the ResetPlayerCount method on the door controller
+        doorController.ResetPlayerCount();
     }
 }
