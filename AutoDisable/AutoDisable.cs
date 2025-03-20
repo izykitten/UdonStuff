@@ -2,30 +2,26 @@
 using UnityEngine;
 using UnityEditor; // Still required for delayCall
 
-[ExecuteAlways]
 public class AutoDisable : MonoBehaviour
 {
     // Added option: enableDuringLightBake is true by default
     public bool enableDuringLightBake = true;
 
-    void Start()
-    {
-        gameObject.SetActive(false);
-    }
-
     #if UNITY_EDITOR
     void OnValidate()
     {
-        if (!Application.isPlaying)
+        if (!EditorApplication.isPlayingOrWillChangePlaymode && !BuildPipeline.isBuildingPlayer)
         {
-            EditorApplication.delayCall += () =>
-            {
-                if (this) // ensure object still exists
-                {
-                    gameObject.SetActive(false);
-                }
-            };
+            return;
         }
+        EditorApplication.delayCall += () =>
+        {
+            if (this) // ensure object still exists
+            {
+                gameObject.SetActive(false);
+                DestroyImmediate(this);
+            }
+        };
     }
     #endif
 

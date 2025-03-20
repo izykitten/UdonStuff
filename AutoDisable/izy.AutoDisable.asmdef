@@ -1,5 +1,6 @@
 {
     "name": "izy.AutoDisable",
+    "rootNamespace": "",
     "references": [],
     "includePlatforms": [],
     "excludePlatforms": [],
