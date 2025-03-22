@@ -4,12 +4,13 @@ using UnityEngine;
 using UnityEditor;
 using UnityEditor.Build;
 using UnityEditor.Build.Reporting;
+using System.IO;
 
 // 1) Add this VRChat SDK namespace:
 using VRC.SDKBase.Editor.BuildPipeline;
 
 [InitializeOnLoad]
-public static class AutoDisableEditor
+public static class AutoDisableManager  // RENAMED from AutoDisableEditor to AutoDisableManager
 {
     // Option to enable/disable debug logs
     private static bool debugLogsEnabled = true;
@@ -21,7 +22,7 @@ public static class AutoDisableEditor
     // Change access modifier to internal
     internal static Dictionary<AutoDisable, bool> vrcBuildPreviousStates = new Dictionary<AutoDisable, bool>();
 
-    static AutoDisableEditor()
+    static AutoDisableManager()  // Constructor renamed to match class
     {
         Lightmapping.bakeStarted += OnBakeStarted;
         Lightmapping.bakeCompleted += OnBakeCompleted;
@@ -222,11 +223,11 @@ public class AutoDisableVRCBuildCallbacks : IVRCSDKBuildRequestedCallback
     {
         // Store previous states and disable objects
         var components = Resources.FindObjectsOfTypeAll<AutoDisable>();
-        AutoDisableEditor.vrcBuildPreviousStates.Clear();
+        AutoDisableManager.vrcBuildPreviousStates.Clear();  // Updated reference
         foreach (var comp in components)
         {
             // Save the current state before disabling
-            AutoDisableEditor.vrcBuildPreviousStates[comp] = comp.gameObject.activeSelf;
+            AutoDisableManager.vrcBuildPreviousStates[comp] = comp.gameObject.activeSelf;  // Updated reference
             comp.gameObject.SetActive(false);
         }
 
@@ -247,7 +248,7 @@ public class AutoDisableVRCBuildCallbacks : IVRCSDKBuildRequestedCallback
         // If we were building but now we've stopped (completed, failed, or cancelled)
         if (wasBuildingPlayer && !isCurrentlyBuilding)
         {
-            AutoDisableEditor.RestoreVRCBuildStates();
+            AutoDisableManager.RestoreVRCBuildStates();  // Updated reference
             // Unregister this update check
             EditorApplication.update -= CheckBuildCompletion;
         }
@@ -264,7 +265,74 @@ public class AutoDisableBuildPostprocessor : IPostprocessBuildWithReport
     public void OnPostprocessBuild(BuildReport report)
     {
         // Restore states after build is complete
-        AutoDisableEditor.RestoreVRCBuildStates();
+        AutoDisableManager.RestoreVRCBuildStates();  // Updated reference
+    }
+}
+
+// This class can keep its name as it's a proper CustomEditor
+[CustomEditor(typeof(AutoDisable))]
+public class AutoDisableEditor : Editor
+{
+    public override void OnInspectorGUI()
+    {
+        DrawDefaultInspector();
+        
+        // Add a button to manually save/restore states
+        if (GUILayout.Button("Save Current State"))
+        {
+            var script = target as AutoDisable;
+            if (script)
+            {
+                string objectId = GetObjectId(script.gameObject);
+                string stateCachePath = "Library/AutoDisableStates.json";
+                
+                Dictionary<string, bool> states = new Dictionary<string, bool>();
+                if (File.Exists(stateCachePath))
+                {
+                    try
+                    {
+                        string json = File.ReadAllText(stateCachePath);
+                        StateData data = JsonUtility.FromJson<StateData>(json);
+                        states = data.states;
+                    }
+                    catch { }
+                }
+                
+                states[objectId] = script.gameObject.activeSelf;
+                
+                string newJson = JsonUtility.ToJson(new StateData { states = states });
+                File.WriteAllText(stateCachePath, newJson);
+                
+                Debug.Log($"Saved state for {script.gameObject.name}: {script.gameObject.activeSelf}");
+            }
+        }
+    }
+    
+    private string GetObjectId(GameObject obj)
+    {
+        string scenePath = obj.scene.path;
+        string objectPath = GetObjectPath(obj);
+        return $"{scenePath}:{objectPath}";
+    }
+    
+    private string GetObjectPath(GameObject obj)
+    {
+        string path = obj.name;
+        Transform parent = obj.transform.parent;
+        
+        while (parent != null)
+        {
+            path = $"{parent.name}/{path}";
+            parent = parent.parent;
+        }
+        
+        return path;
+    }
+    
+    [System.Serializable]
+    private class StateData
+    {
+        public Dictionary<string, bool> states = new Dictionary<string, bool>();
     }
 }
 #endif

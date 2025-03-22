@@ -28,30 +28,11 @@ public class DoorProximitySensor : UdonSharpBehaviour
             Debug.Log("[DoorProximitySensor] Connected to door and set proximity mode");
 
             // Check for local player already inside the collider
-            CheckForLocalPlayerAlreadyInside();
+            doorController.CheckForLocalPlayerAlreadyInside();
         }
         else
         {
             Debug.LogError("[DoorProximitySensor] NO DOOR CONTROLLER ASSIGNED!");
-        }
-    }
-
-    // Modify to only check local player
-    private void CheckForLocalPlayerAlreadyInside()
-    {
-        VRCPlayerApi localPlayer = Networking.LocalPlayer;
-        if (localPlayer == null) return;
-
-        Collider col = GetComponent<Collider>();
-        if (col == null) return;
-
-        if (col.bounds.Contains(localPlayer.GetPosition()))
-        {
-            if (debugLogging)
-            {
-                Debug.Log($"[DoorProximitySensor] Local player already inside");
-            }
-            doorController.TriggerSensorPlayerEntered(localPlayer);
         }
     }
 
