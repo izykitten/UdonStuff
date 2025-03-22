@@ -62,14 +62,6 @@ public class SlidingDoor : UdonSharpBehaviour
     }
 
     [SerializeField]
-    private int playCloseSoundInReverseValue = 0;
-    public bool PlayCloseSoundInReverse 
-    { 
-        get { return playCloseSoundInReverseValue != 0; } 
-        set { playCloseSoundInReverseValue = value ? 1 : 0; } 
-    }
-
-    [SerializeField]
     private AudioClip openSound;
 
     [SerializeField]
@@ -79,6 +71,9 @@ public class SlidingDoor : UdonSharpBehaviour
     private GameObject audioSourceObject;
 
     private AudioSource audioSource;
+
+    [SerializeField]
+    private bool playCloseSoundInReverse = false;
 
     // Fix the UseProximitySensor property to properly check and set the operation mode
     public bool UseProximitySensor 
@@ -132,25 +127,25 @@ public class SlidingDoor : UdonSharpBehaviour
         set { enableLockingSystemValue = value ? 1 : 0; }
     }
 
-    // Add flags to track pending door operations
+    // Flags to track pending door operations
     private bool pendingCloseAfterOpen = false;
     private bool pendingOpenAfterClose = false;
-    private bool pendingOpenFromTrigger = false; // New flag to remember if pending open was from trigger
+    private bool pendingOpenFromTrigger = false; // Remembers if pending open was from trigger
 
     [SerializeField]
     private GameObject proximitySensorObject;
 
-    // Add new force close flag:
+    // Flag to override player count checks when force-closing
     private bool forceCloseFlag = false;
 
-    // Add debugging property near the top of the class
+    // Controls debug message output
     [SerializeField]
-    private bool debugLogging = true; // Default to true while troubleshooting
+    private bool debugLogging = true;
 
-    // Add a new flag to force close even when locked
+    // Flag to allow closing even when door is locked
     private bool bypassLockForClose = false;
 
-    // Add new player check safety variables and timer
+    // Safety variables for player detection
     private float playerCheckTimer = 0f;
     private float playerCheckInterval = 2.0f; // Check every 2 seconds
     private int lastKnownPlayerCount = 0;
@@ -176,15 +171,9 @@ public class SlidingDoor : UdonSharpBehaviour
             if (debugLogging) Debug.Log("[SlidingDoor] START: Proximity sensor mode is DISABLED");
         }
 
-        audioSource = (audioSourceObject != null) 
-                       ? audioSourceObject.GetComponent<AudioSource>() 
-                       : GetComponent<AudioSource>();
-
-        if (audioSource == null)
-        {
-            Debug.LogWarning("No AudioSource found on this GameObject or the assigned audioSourceObject.");
-        }
-
+        // Initialize the audio source right away
+        InitializeAudioSource();
+        
         if (UseProximitySensor)
         {
             Debug.Log("[SlidingDoor] IMPORTANT: For proximity sensing to work correctly, use the separate DoorProximitySensor script attached to your trigger collider and reference this SlidingDoor from it!");
@@ -200,17 +189,85 @@ public class SlidingDoor : UdonSharpBehaviour
 
         // Manually check for local player already inside the collider
         CheckForLocalPlayerAlreadyInside();
+
+        // Enhanced audio initialization with more detailed debugging
+        if (audioSourceObject != null)
+        {
+            audioSource = audioSourceObject.GetComponent<AudioSource>();
+            if (audioSource != null)
+            {
+                Debug.Log("[SlidingDoor] Using AudioSource from audioSourceObject: " + audioSourceObject.name);
+            }
+        }
+        
+        if (audioSource == null)
+        {
+            audioSource = GetComponent<AudioSource>();
+            if (audioSource != null)
+            {
+                Debug.Log("[SlidingDoor] Using AudioSource on this GameObject");
+            }
+            else
+            {
+                Debug.LogError("[SlidingDoor] NO AUDIO SOURCE FOUND! Add an AudioSource to this GameObject or assign audioSourceObject.");
+            }
+        }
+        
+        // Validate the audio clips at start with helpful message
+        if (openSound == null)
+            Debug.LogError("[SlidingDoor] openSound clip is not assigned! Door will make no sound when opening.");
+        if (closeSound == null)
+            Debug.LogError("[SlidingDoor] closeSound clip is not assigned! Door will make no sound when closing.");
+    }
+
+    // Fix the InitializeAudioSource method to not use AddComponent
+    private void InitializeAudioSource()
+    {
+        if (audioSourceObject != null)
+        {
+            audioSource = audioSourceObject.GetComponent<AudioSource>();
+            if (audioSource == null)
+            {
+                Debug.LogError("[SlidingDoor] No AudioSource found on the assigned audioSourceObject!");
+            }
+            else
+            {
+                Debug.Log("[SlidingDoor] Audio source initialized from audioSourceObject: " + audioSourceObject.name);
+            }
+        }
+        else
+        {
+            audioSource = GetComponent<AudioSource>();
+            if (audioSource == null)
+            {
+                Debug.LogError("[SlidingDoor] No AudioSource found! Please add an AudioSource component to this GameObject or assign an audioSourceObject.");
+                // Cannot use AddComponent in UdonSharp, must be added in the editor
+            }
+            else
+            {
+                Debug.Log("[SlidingDoor] Using AudioSource on this GameObject");
+            }
+        }
+        
+        // Validate the audio clips
+        if (openSound == null)
+            Debug.LogWarning("[SlidingDoor] openSound clip is not assigned!");
+        
+        if (closeSound == null)
+            Debug.LogWarning("[SlidingDoor] closeSound clip is not assigned!");
     }
 
     // Change method to public to allow access from DoorProximitySensor
     public void CheckForLocalPlayerAlreadyInside()
     {
-        VRCPlayerApi localPlayer = Networking.LocalPlayer;
-        if (localPlayer == null) return;
-
+        // Remove network-related code
         Collider col = proximitySensorObject.GetComponent<Collider>();
         if (col == null) return;
 
+        VRCPlayerApi localPlayer = Networking.LocalPlayer;
+        if (localPlayer == null) return;
+
+        // Check if any player is inside the collider
         if (col.bounds.Contains(localPlayer.GetPosition()))
         {
             if (debugLogging)
@@ -302,6 +359,13 @@ public class SlidingDoor : UdonSharpBehaviour
         
         // Reset player count to prevent proximity sensor from keeping door open
         playerCount = 0;
+        
+        // Play closing sound before setting position
+        if (closeSound != null) 
+        {
+            Debug.Log("[SlidingDoor] _keypadClear: Playing close sound before force close");
+            PlayDoorSound(closeSound); // Remove second parameter
+        }
         
         // Force door to closed state
         doorState = DoorState.Closed;
@@ -402,16 +466,11 @@ public class SlidingDoor : UdonSharpBehaviour
     // Modify CheckForPlayersInTrigger to only check local player
     private void CheckForPlayersInTrigger()
     {
-        // Only works if we have a sensor object
+        // Remove network-related code
         if (proximitySensorObject == null) return;
         
-        Debug.Log("[SlidingDoor] Performing manual check for local player in sensor volume");
+        Debug.Log("[SlidingDoor] Performing manual check for player in sensor volume");
         
-        // Only check local player instead of all players
-        VRCPlayerApi localPlayer = Networking.LocalPlayer;
-        if (localPlayer == null) return;
-        
-        // Get the collider from proximity sensor to check against
         Collider sensorCollider = proximitySensorObject.GetComponent<Collider>();
         
         if (sensorCollider == null) {
@@ -419,15 +478,18 @@ public class SlidingDoor : UdonSharpBehaviour
             return;
         }
         
-        // Check if local player is in the collider bounds
+        VRCPlayerApi localPlayer = Networking.LocalPlayer;
+        if (localPlayer == null) return;
+
+        // Check if any player is in the collider bounds
         if (sensorCollider.bounds.Contains(localPlayer.GetPosition())) {
-            Debug.Log("[SlidingDoor] Found local player in sensor bounds during manual check");
+            Debug.Log("[SlidingDoor] Found player in sensor bounds during manual check");
             // Call our enter function directly
             playerDetectedThisFrame = true;
             TriggerSensorPlayerEntered(localPlayer);
         }
         else if (playerCount > 0) {
-            Debug.Log("[SlidingDoor] Local player not found in sensor during manual check, but count is " + 
+            Debug.Log("[SlidingDoor] Player not found in sensor during manual check, but count is " + 
                       playerCount + ". Will reset to 0.");
             playerCount = 0;
         }
@@ -487,10 +549,10 @@ public class SlidingDoor : UdonSharpBehaviour
         doorState = DoorState.Opening;
         timer = 0;
         
-        // Play sound if available
-        if (openSound != null && audioSource != null)
+        // More reliable sound playback with logging for opening
+        if (openSound != null)
         {
-            audioSource.PlayOneShot(openSound);
+            PlayDoorSound(openSound); // Remove second parameter
         }
         
         Debug.Log("[SlidingDoor] Door StartOpening called - Door is " + (DoorLocked ? "locked" : "unlocked") + 
@@ -557,131 +619,143 @@ public class SlidingDoor : UdonSharpBehaviour
         // Reset the force flag
         forceCloseFlag = false;
         
-        if (closeSound != null && audioSource != null)
+        // More reliable sound playback with logging for closing
+        if (closeSound != null)
         {
-            if (PlayCloseSoundInReverse)
-            {
-                audioSource.pitch = -1;
-                audioSource.PlayOneShot(closeSound);
-                audioSource.pitch = 1;
-            }
-            else
-            {
-                audioSource.PlayOneShot(closeSound);
-            }
+            PlayDoorSound(closeSound, playCloseSoundInReverse);
         }
     }
 
-    // Fix the OnPlayerTriggerEnter to better handle proximity detection and ignore remote players
-    public override void OnPlayerTriggerEnter(VRCPlayerApi player)
+    // New consolidated method for playing door sounds
+    private void PlayDoorSound(AudioClip soundClip, bool reverse = false)
     {
-        // Set the detection flag
-        playerDetectedThisFrame = true;
-
-        // Always log this regardless of debug setting
-        Debug.Log("[SlidingDoor] OnPlayerTriggerEnter called! Player: " + (player != null ? player.displayName : "NULL"));
-        
-        if (player == null)
+        if (soundClip == null)
         {
-            Debug.LogError("[SlidingDoor] OnPlayerTriggerEnter called with null player");
+            Debug.LogWarning("[SlidingDoor] Cannot play sound: null clip");
             return;
         }
         
-        // Only process for local player
-        if (!player.isLocal)
+        if (audioSource == null)
         {
-            if (debugLogging) Debug.Log("[SlidingDoor] Ignoring remote player: " + player.displayName);
-            return;
-        }
-        
-        // Important: Log the GameObject that owns this collider
-        Debug.Log("[SlidingDoor] Trigger source GameObject: " + gameObject.name);
-        
-        bool isProximityMode = UseProximitySensor;
-        if (debugLogging)
-        {
-            Debug.Log("[SlidingDoor] Trigger ENTER: " + player.displayName + 
-                      " (Local: " + player.isLocal + 
-                      ") Proximity mode: " + isProximityMode + 
-                      ", OperationMode: " + OperationMode + 
-                      ", Current count: " + playerCount);
-        }
-
-        if (isProximityMode)
-        {
-            playerCount++;
-            
-            if (doorState == DoorState.Closed && (!EnableLockingSystem || !DoorLocked))
-            {
-                openingFromTrigger = true; // Set flag to indicate opening from trigger
-                StartOpening();
+            // Try one more time to get the audio source
+            InitializeAudioSource();
                 
-                if (debugLogging) Debug.Log("[SlidingDoor] Proximity trigger opening door. Player count: " + playerCount);
-            }
-            else if (doorState == DoorState.Closing)
+            if (audioSource == null)
             {
-                openingFromTrigger = true; // Set flag before queueing
-                Debug.Log("[SlidingDoor] Door is closing, queueing open after close (from trigger)");
-                pendingOpenAfterClose = true;
-                pendingOpenFromTrigger = true; // Mark this pending open as triggered by player
+                Debug.LogError("[SlidingDoor] Cannot play sound: no AudioSource component found!");
+                return;
             }
         }
-    }
-
-    public override void OnPlayerTriggerExit(VRCPlayerApi player)
-    {
-        Debug.Log("[SlidingDoor] OnPlayerTriggerExit called!"); // Check if the function is called
-
-        if (player == null)
-        {
-            Debug.LogError("[SlidingDoor] OnPlayerTriggerExit called with null player");
-            return;
-        }
         
-        // Only process for local player
-        if (!player.isLocal)
-        {
-            if (debugLogging) Debug.Log("[SlidingDoor] Ignoring remote player exit: " + player.displayName);
-            return;
-        }
+        Debug.Log($"[SlidingDoor] Playing door sound: {soundClip.name}, Volume={audioSource.volume}, Reverse={reverse}");
         
-        bool isProximityMode = UseProximitySensor;
-        if (debugLogging)
-        {
-            Debug.Log("[SlidingDoor] Trigger EXIT: " + player.displayName + 
-                      " (Local: " + player.isLocal + 
-                      ") Proximity mode: " + isProximityMode + 
-                      ", OperationMode: " + OperationMode + 
-                      ", Current count: " + playerCount);
-        }
-
-        if (!isProximityMode)
-        {
-            return;
-        }
+        // For better reliability, ensure audio is not muted
+        audioSource.volume = Mathf.Max(0.1f, audioSource.volume);
         
-        playerCount = Mathf.Max(0, playerCount - 1);
-        
-        // Always log the player count change regardless of debug setting
-        Debug.Log("[SlidingDoor] Player exited - player count now: " + playerCount);
-        
-        // Only close if no players are left
-        if (playerCount == 0)
+        if (reverse)
         {
-            if (doorState == DoorState.Open)
-            {
-                Debug.Log("[SlidingDoor] Exit detected, door is fully open - closing now.");
-                StartClosingFromTrigger();
-            }
-            else if (doorState == DoorState.Opening)
-            {
-                Debug.Log("[SlidingDoor] Exit detected while door is opening - queue close after open finishes.");
-                pendingCloseAfterOpen = true;
-            }
+            AudioClip reversedClip = CreateReversedAudioClip(soundClip);
+            audioSource.PlayOneShot(reversedClip);
         }
         else
         {
-            Debug.Log("[SlidingDoor] Not closing - " + playerCount + " player(s) still in sensor area");
+            audioSource.PlayOneShot(soundClip);
+        }
+    }
+
+    private AudioClip CreateReversedAudioClip(AudioClip originalClip)
+    {
+        float[] samples = new float[originalClip.samples * originalClip.channels];
+        originalClip.GetData(samples, 0);
+        Array.Reverse(samples);
+
+        AudioClip reversedClip = AudioClip.Create(originalClip.name + "_reversed", originalClip.samples, originalClip.channels, originalClip.frequency, false);
+        reversedClip.SetData(samples, 0);
+
+        return reversedClip;
+    }
+
+    public void OnPlayerTriggerEnter()
+    {
+        // Remove network-related code
+        playerDetectedThisFrame = true;
+
+        Debug.Log("[SlidingDoor] OnPlayerTriggerEnter called!");
+
+        // Check if any player is inside the collider
+        if (proximitySensorObject.GetComponent<Collider>().bounds.Contains(transform.position))
+        {
+            Debug.Log("[SlidingDoor] Player entered proximity sensor");
+
+            bool isProximityMode = UseProximitySensor;
+            if (debugLogging)
+            {
+                Debug.Log("[SlidingDoor] Trigger ENTER: Proximity mode: " + isProximityMode + ", Current count: " + playerCount);
+            }
+
+            if (isProximityMode)
+            {
+                playerCount++;
+
+                if (doorState == DoorState.Closed && (!EnableLockingSystem || !DoorLocked))
+                {
+                    openingFromTrigger = true;
+                    StartOpening();
+
+                    if (debugLogging) Debug.Log("[SlidingDoor] Proximity trigger opening door. Player count: " + playerCount);
+                }
+                else if (doorState == DoorState.Closing)
+                {
+                    openingFromTrigger = true;
+                    Debug.Log("[SlidingDoor] Door is closing, queueing open after close (from trigger)");
+                    pendingOpenAfterClose = true;
+                    pendingOpenFromTrigger = true;
+                }
+            }
+        }
+    }
+
+    public void OnPlayerTriggerExit()
+    {
+        Debug.Log("[SlidingDoor] OnPlayerTriggerExit called!");
+
+        // Check if any player is inside the collider
+        if (!proximitySensorObject.GetComponent<Collider>().bounds.Contains(transform.position))
+        {
+            Debug.Log("[SlidingDoor] Player exited proximity sensor");
+
+            bool isProximityMode = UseProximitySensor;
+            if (debugLogging)
+            {
+                Debug.Log("[SlidingDoor] Trigger EXIT: Proximity mode: " + isProximityMode + ", Current count: " + playerCount);
+            }
+
+            if (!isProximityMode)
+            {
+                return;
+            }
+
+            playerCount = Mathf.Max(0, playerCount - 1);
+
+            Debug.Log("[SlidingDoor] Player exited - player count now: " + playerCount);
+
+            if (playerCount == 0)
+            {
+                if (doorState == DoorState.Open)
+                {
+                    Debug.Log("[SlidingDoor] Exit detected, door is fully open - closing now.");
+                    StartClosingFromTrigger();
+                }
+                else if (doorState == DoorState.Opening)
+                {
+                    Debug.Log("[SlidingDoor] Exit detected while door is opening - queue close after open finishes.");
+                    pendingCloseAfterOpen = true;
+                }
+            }
+            else
+            {
+                Debug.Log("[SlidingDoor] Not closing - " + playerCount + " player(s) still in sensor area");
+            }
         }
     }
 
@@ -903,39 +977,30 @@ public class SlidingDoor : UdonSharpBehaviour
 
     // Add these new public methods for the proximity sensor to call
     // Modify PlayerEnteredProximity to only count local players
-    public void PlayerEnteredProximity(VRCPlayerApi player)
+    public void PlayerEnteredProximity()
     {
-        if (player == null)
-        {
-            Debug.LogError("[SlidingDoor] Null player passed to PlayerEnteredProximity");
-            return;
-        }
-        
-        // Only process for local player
-        if (!player.isLocal)
-        {
-            if (debugLogging) Debug.Log("[SlidingDoor] Ignoring remote player in PlayerEnteredProximity: " + player.displayName);
-            return;
-        }
-        
+        // Remove network-related code
+        Debug.Log("[SlidingDoor] PlayerEnteredProximity called");
+
         bool isProximityMode = UseProximitySensor;
         if (debugLogging)
         {
-            Debug.Log("[SlidingDoor] PlayerEnteredProximity: " + player.displayName +
-                      ", Proximity mode: " + isProximityMode + ", Current count: " + playerCount);
+            Debug.Log("[SlidingDoor] PlayerEnteredProximity: Proximity mode: " + isProximityMode + ", Current count: " + playerCount);
         }
         if (isProximityMode)
         {
             playerCount++;
-            if ((doorState == DoorState.Closing || doorState == DoorState.Closed) &&
-                (!EnableLockingSystem || !DoorLocked))
+            if ((doorState == DoorState.Closing || doorState == DoorState.Closed) && (!EnableLockingSystem || !DoorLocked))
             {
                 openingFromTrigger = true;
-                if (doorState == DoorState.Closing) {
+                if (doorState == DoorState.Closing)
+                {
                     pendingOpenAfterClose = true;
-                    pendingOpenFromTrigger = true; // Mark pending open as trigger-based
+                    pendingOpenFromTrigger = true;
                     Debug.Log("[SlidingDoor] Door is closing - queueing open after close from player proximity");
-                } else {
+                }
+                else
+                {
                     StartOpening();
                 }
             }
@@ -947,26 +1012,15 @@ public class SlidingDoor : UdonSharpBehaviour
     }
 
     // Modify PlayerExitedProximity to only count local players
-    public void PlayerExitedProximity(VRCPlayerApi player)
+    public void PlayerExitedProximity()
     {
-        if (player == null)
-        {
-            Debug.LogError("[SlidingDoor] Null player passed to PlayerExitedProximity");
-            return;
-        }
-        
-        // Only process for local player
-        if (!player.isLocal)
-        {
-            if (debugLogging) Debug.Log("[SlidingDoor] Ignoring remote player exit in PlayerExitedProximity: " + player.displayName);
-            return;
-        }
-        
+        // Remove network-related code
+        Debug.Log("[SlidingDoor] PlayerExitedProximity called");
+
         bool isProximityMode = UseProximitySensor;
         if (debugLogging)
         {
-            Debug.Log("[SlidingDoor] PlayerExitedProximity: " + player.displayName +
-                      ", Proximity mode: " + isProximityMode + ", Current count: " + playerCount);
+            Debug.Log("[SlidingDoor] PlayerExitedProximity: Proximity mode: " + isProximityMode + ", Current count: " + playerCount);
         }
         if (!isProximityMode)
         {
@@ -975,8 +1029,7 @@ public class SlidingDoor : UdonSharpBehaviour
         }
         playerCount = Mathf.Max(0, playerCount - 1);
         Debug.Log("[SlidingDoor] Player count after exit: " + playerCount);
-        
-        // Only attempt to close if no players remain
+
         if (playerCount == 0)
         {
             if (doorState == DoorState.Open)
@@ -1018,9 +1071,16 @@ public class SlidingDoor : UdonSharpBehaviour
         {
             Debug.Log("[SlidingDoor] Door is already closing");
         }
-        else
+        else if (doorState == DoorState.Closed)
         {
-            Debug.Log("[SlidingDoor] Door already closed, current state: " + doorState);
+            Debug.Log("[SlidingDoor] Door already closed, ensure sound played");
+            
+            // Even if door is closed, try to play sound once to ensure it's heard
+            if (closeSound != null) 
+            {
+                Debug.Log("[SlidingDoor] Playing close sound for already-closed door");
+                PlayDoorSound(closeSound); // Remove second parameter
+            }
         }
         
         // Reset force flag after attempting to close
@@ -1085,32 +1145,27 @@ public class SlidingDoor : UdonSharpBehaviour
     // Modify TriggerSensorPlayerEntered to only handle local players
     public void TriggerSensorPlayerEntered(VRCPlayerApi player)
     {
-        // Always log this call
         Debug.Log("[SlidingDoor] TriggerSensorPlayerEntered called for: " + (player != null ? player.displayName : "NULL"));
-        
+
         if (player == null) return;
-        
-        // Only process for local player
+
         if (!player.isLocal)
         {
             Debug.Log("[SlidingDoor] Ignoring remote player in TriggerSensorPlayerEntered: " + player.displayName);
             return;
         }
-        
-        // Check if the door is locked
+
         if (EnableLockingSystem && DoorLocked)
         {
             Debug.Log("[SlidingDoor] Door is locked - ignoring player entry");
             return;
         }
-        
-        // Force proximity mode to be true (for safety)
+
         UseProximitySensor = true;
-        
-        // Increment player count
+
         playerCount++;
         Debug.Log("[SlidingDoor] Player count now: " + playerCount);
-        
+
         if (doorState == DoorState.Closed)
         {
             openingFromTrigger = true;
@@ -1128,7 +1183,7 @@ public class SlidingDoor : UdonSharpBehaviour
         {
             openingFromTrigger = true;
             pendingOpenAfterClose = true;
-            pendingOpenFromTrigger = true; // Mark pending open as trigger-based
+            pendingOpenFromTrigger = true;
             Debug.Log("[SlidingDoor] Door is closing, queueing open after close (from TriggerSensor)");
         }
         else if (doorState == DoorState.Open || doorState == DoorState.Opening)
@@ -1141,29 +1196,22 @@ public class SlidingDoor : UdonSharpBehaviour
     // Fix the TriggerSensorPlayerExited method to ensure the door closes
     public void TriggerSensorPlayerExited(VRCPlayerApi player)
     {
-        // Always log this call
         Debug.Log("[SlidingDoor] TriggerSensorPlayerExited called for: " + (player != null ? player.displayName : "NULL"));
-        
+
         if (player == null) return;
-        
-        // Only process for local player
+
         if (!player.isLocal)
         {
             Debug.Log("[SlidingDoor] Ignoring remote player exit in TriggerSensorPlayerExited: " + player.displayName);
             return;
         }
-        
-        // Decrement player count (safely)
+
         playerCount = Mathf.Max(0, playerCount - 1);
         Debug.Log("[SlidingDoor] Player count now: " + playerCount);
-        
-        // If no players left, close the door immediately or with slight delay
+
         if (playerCount == 0 && (doorState == DoorState.Open || doorState == DoorState.Opening))
         {
-            // Log that we're scheduling a close
             Debug.Log("[SlidingDoor] No players detected - scheduling door close");
-            
-            // Use a very short delay for more reliable operation
             SendCustomEventDelayedSeconds(nameof(ForceCloseNow), 0.2f);
         }
     }

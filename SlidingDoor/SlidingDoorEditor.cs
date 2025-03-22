@@ -8,21 +8,22 @@ public class SlidingDoorEditor : Editor
 {
     public override void OnInspectorGUI()
     {
-        // Update serialized object.
+        // Update serialized object
         serializedObject.Update();
 
         // Get the current operation mode
         SerializedProperty operationModeProp = serializedObject.FindProperty("operationModeValue");
         int operationMode = operationModeProp.intValue;
 
-        // Draw default properties (except our int-backed fields).
+        // Draw default properties (except our int-backed fields)
         SerializedProperty prop = serializedObject.GetIterator();
         bool enterChildren = true;
         while (prop.NextVisible(enterChildren))
         {
-            // Skip our int-backed fields.
-            if (prop.name == "operationModeValue" || prop.name == "playCloseSoundInReverseValue" || 
-                prop.name == "doorLockedValue" || prop.name == "enableLockingSystemValue")
+            // Skip our int-backed fields
+            if (prop.name == "operationModeValue" || 
+                prop.name == "doorLockedValue" || prop.name == "enableLockingSystemValue" ||
+                prop.name == "playCloseSoundInReverse") // Skip the duplicate checkbox
                 continue;
                 
             // Skip the proximitySensorCollider field if not using proximity sensor
@@ -35,7 +36,7 @@ public class SlidingDoorEditor : Editor
 
         // Draw operation mode as an enum dropdown
         operationModeProp.intValue = EditorGUILayout.Popup("Operation Mode", operationModeProp.intValue, 
-            new string[] { "Normal", "Proximity Sensor" }); // Removed Locking System
+            new string[] { "Normal", "Proximity Sensor" });
 
         // Draw proximitySensorCollider field when using Proximity Sensor mode
         if (operationMode == 2) // Proximity Sensor
@@ -49,23 +50,19 @@ public class SlidingDoorEditor : Editor
         enableLockingBool = EditorGUILayout.Toggle("Enable Locking System", enableLockingBool);
         enableLockingProp.intValue = enableLockingBool ? 1 : 0;
 
-        // Remove conditional Door Locked display
-        // Draw custom checkbox for Door Locked - only show when using locking system
-        // if (operationModeProp.intValue == 1) // Locking System
-        // {
+        // Draw custom checkbox for Door Locked
         SerializedProperty doorLockedProp = serializedObject.FindProperty("doorLockedValue");
         bool doorLockedBool = doorLockedProp.intValue != 0;
         doorLockedBool = EditorGUILayout.Toggle("Door Locked", doorLockedBool);
         doorLockedProp.intValue = doorLockedBool ? 1 : 0;
-        // }
 
-        // Draw custom checkbox for Play Close Sound In Reverse.
-        SerializedProperty playCloseProp = serializedObject.FindProperty("playCloseSoundInReverseValue");
-        bool playCloseBool = playCloseProp.intValue != 0;
-        playCloseBool = EditorGUILayout.Toggle("Play Close Sound In Reverse", playCloseBool);
-        playCloseProp.intValue = playCloseBool ? 1 : 0;
+        // Draw custom checkbox for Play Close Sound In Reverse
+        SerializedProperty playCloseSoundInReverseProp = serializedObject.FindProperty("playCloseSoundInReverse");
+        bool playCloseSoundInReverseBool = playCloseSoundInReverseProp.boolValue;
+        playCloseSoundInReverseBool = EditorGUILayout.Toggle("Play Close Sound In Reverse", playCloseSoundInReverseBool);
+        playCloseSoundInReverseProp.boolValue = playCloseSoundInReverseBool;
 
-        // Apply changes.
+        // Apply changes
         serializedObject.ApplyModifiedProperties();
     }
 }

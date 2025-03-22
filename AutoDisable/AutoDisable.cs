@@ -9,8 +9,8 @@ public class AutoDisable : MonoBehaviour
     // Properties that need to be available to AutoDisableEditor
     public bool enableDuringLightBake = true;
     public bool enableDuringOcclusionBake = true;
-    public bool startEnabled = false;
-
+    public bool startEnabled = false; // Controls initial state in the built game
+    
     void Awake()
     {
         // Set the object's active state based on the startEnabled property

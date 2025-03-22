@@ -22,7 +22,10 @@ public static class AutoDisableManager  // RENAMED from AutoDisableEditor to Aut
     // Change access modifier to internal
     internal static Dictionary<AutoDisable, bool> vrcBuildPreviousStates = new Dictionary<AutoDisable, bool>();
 
-    static AutoDisableManager()  // Constructor renamed to match class
+    // Track previous active states to detect changes
+    private static Dictionary<int, bool> previousActiveStates = new Dictionary<int, bool>();
+
+    static AutoDisableManager()
     {
         Lightmapping.bakeStarted += OnBakeStarted;
         Lightmapping.bakeCompleted += OnBakeCompleted;
@@ -31,8 +34,129 @@ public static class AutoDisableManager  // RENAMED from AutoDisableEditor to Aut
         // Register for build events
         BuildPlayerWindow.RegisterBuildPlayerHandler(OnBuildPlayer);
         
+        // Monitor for active state changes
+        EditorApplication.hierarchyChanged += CheckForActiveStateChanges;
+        
         // Load debug log preference
         debugLogsEnabled = EditorPrefs.GetBool("AutoDisable_DebugLogsEnabled", true);
+        
+        // Initialize previous states
+        EditorApplication.delayCall += InitializePreviousStates;
+    }
+    
+    private static void InitializePreviousStates()
+    {
+        previousActiveStates.Clear();
+        var scripts = Resources.FindObjectsOfTypeAll<AutoDisable>();
+        foreach (var script in scripts)
+        {
+            if (script && script.gameObject)
+            {
+                // Store initial state using instance ID as key
+                previousActiveStates[script.gameObject.GetInstanceID()] = script.gameObject.activeSelf;
+            }
+        }
+    }
+    
+    // Check specifically for active state changes
+    private static void CheckForActiveStateChanges()
+    {
+        // Don't check if we're about to enter play mode or already in it or building
+        if (EditorApplication.isPlayingOrWillChangePlaymode || BuildPipeline.isBuildingPlayer)
+            return;
+            
+        bool stateChanged = false;
+        var scripts = Resources.FindObjectsOfTypeAll<AutoDisable>();
+        
+        foreach (var script in scripts)
+        {
+            if (script && script.gameObject)
+            {
+                int instanceID = script.gameObject.GetInstanceID();
+                bool currentState = script.gameObject.activeSelf;
+                
+                // Check if we have a record of this object's previous state
+                if (previousActiveStates.TryGetValue(instanceID, out bool previousState))
+                {
+                    // Check if the active state has changed
+                    if (currentState != previousState)
+                    {
+                        if (debugLogsEnabled)
+                            Debug.Log($"Object {script.gameObject.name} active state changed from {previousState} to {currentState}");
+                        
+                        stateChanged = true;
+                    }
+                }
+                
+                // Update the record with current state
+                previousActiveStates[instanceID] = currentState;
+            }
+        }
+        
+        // If any object's active state changed, save all states
+        if (stateChanged)
+        {
+            AutoSaveAllStates();
+        }
+    }
+    
+    // Save states for all AutoDisable components
+    private static void AutoSaveAllStates() 
+    {
+        string stateCachePath = "Library/AutoDisableStates.json";
+        Dictionary<string, bool> objectStates = new Dictionary<string, bool>();
+        
+        // Use Resources.FindObjectsOfTypeAll instead of Object.FindObjectsOfTypeAll
+        var scripts = Resources.FindObjectsOfTypeAll<AutoDisable>();
+        foreach (var script in scripts) 
+        {
+            if (script != null && script.gameObject != null) 
+            {
+                string objectId = GetObjectId(script.gameObject);
+                objectStates[objectId] = script.gameObject.activeSelf;
+            }
+        }
+        
+        if (objectStates.Count > 0) 
+        {
+            try {
+                string json = JsonUtility.ToJson(new StateData { states = objectStates });
+                File.WriteAllText(stateCachePath, json);
+                if (debugLogsEnabled) 
+                    Debug.Log($"Auto-saved {objectStates.Count} object states");
+            }
+            catch (System.Exception e) {
+                Debug.LogError($"Error saving states: {e.Message}");
+            }
+        }
+    }
+    
+    // Helper method to get a unique ID for a GameObject
+    private static string GetObjectId(GameObject obj)
+    {
+        string scenePath = obj.scene.path;
+        string objectPath = GetObjectPath(obj);
+        return $"{scenePath}:{objectPath}";
+    }
+    
+    private static string GetObjectPath(GameObject obj)
+    {
+        string path = obj.name;
+        Transform parent = obj.transform.parent;
+        
+        while (parent != null)
+        {
+            path = $"{parent.name}/{path}";
+            parent = parent.parent;
+        }
+        
+        return path;
+    }
+    
+    [System.Serializable]
+    private class StateData
+    {
+        public Dictionary<string, bool> states = new Dictionary<string, bool>();
     }
 
     private static void OnBakeStarted()
@@ -276,63 +400,7 @@ public class AutoDisableEditor : Editor
     public override void OnInspectorGUI()
     {
         DrawDefaultInspector();
-        
-        // Add a button to manually save/restore states
-        if (GUILayout.Button("Save Current State"))
-        {
-            var script = target as AutoDisable;
-            if (script)
-            {
-                string objectId = GetObjectId(script.gameObject);
-                string stateCachePath = "Library/AutoDisableStates.json";
-                
-                Dictionary<string, bool> states = new Dictionary<string, bool>();
-                if (File.Exists(stateCachePath))
-                {
-                    try
-                    {
-                        string json = File.ReadAllText(stateCachePath);
-                        StateData data = JsonUtility.FromJson<StateData>(json);
-                        states = data.states;
-                    }
-                    catch { }
-                }
-                
-                states[objectId] = script.gameObject.activeSelf;
-                
-                string newJson = JsonUtility.ToJson(new StateData { states = states });
-                File.WriteAllText(stateCachePath, newJson);
-                
-                Debug.Log($"Saved state for {script.gameObject.name}: {script.gameObject.activeSelf}");
-            }
-        }
-    }
-    
-    private string GetObjectId(GameObject obj)
-    {
-        string scenePath = obj.scene.path;
-        string objectPath = GetObjectPath(obj);
-        return $"{scenePath}:{objectPath}";
-    }
-    
-    private string GetObjectPath(GameObject obj)
-    {
-        string path = obj.name;
-        Transform parent = obj.transform.parent;
-        
-        while (parent != null)
-        {
-            path = $"{parent.name}/{path}";
-            parent = parent.parent;
-        }
-        
-        return path;
-    }
-    
-    [System.Serializable]
-    private class StateData
-    {
-        public Dictionary<string, bool> states = new Dictionary<string, bool>();
+        // Button removed - state saving is now automatic
     }
 }
 #endif
