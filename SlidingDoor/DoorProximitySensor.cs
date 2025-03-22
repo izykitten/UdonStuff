@@ -24,7 +24,7 @@ public class DoorProximitySensor : UdonSharpBehaviour
         if (doorController != null)
         {
             doorController.UseProximitySensor = true;
-            Debug.Log("[DoorProximitySensor] Connected to door and set proximity mode");
+            if (debugLogging) Debug.Log("[DoorProximitySensor] Connected to door and set proximity mode");
 
             doorController.CheckForLocalPlayerAlreadyInside();
         }

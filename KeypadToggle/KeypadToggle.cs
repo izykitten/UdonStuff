@@ -1,5 +1,6 @@
 using UdonSharp;
 using UnityEngine;
+using VRC.SDKBase;
 
 [UdonBehaviourSyncMode(BehaviourSyncMode.Manual)]
 public class KeypadToggle : UdonSharpBehaviour
@@ -7,42 +8,64 @@ public class KeypadToggle : UdonSharpBehaviour
     [SerializeField] private GameObject[] targetObjects;
     [SerializeField] private int[] AdditionalPasscodeNumbers;
     [SerializeField] private bool DisableKeypadGranted = false;
-    
-    [Header("Toggle Settings")]
-    [Tooltip("If true, objects will be disabled when the correct code is entered")]
-    public bool disableOnCorrect = false;
-    [Tooltip("Delay in seconds before disabling objects (0 = immediate)")]
-    public float disableDelay = 0f;
+
+    [Tooltip("Delay in seconds before disabling objects after keypad is closed (0 = immediate, -1 = never disable)")]
+    public float closeDelay = 0f;
 
     private void Start()
     {
         Debug.Log("[KeypadToggle] Initialized on " + gameObject.name);
     }
     
-    // Core function to toggle target objects
-    private void SetTargetsActive(bool active)
+    // Enable objects
+    public void EnableObjects()
     {
-        Debug.Log("[KeypadToggle] Setting targets active: " + active);
+        Debug.Log("[KeypadToggle] Enabling objects");
         
-        // If no targets specified, activate self but never deactivate
+        // If no targets specified, activate self
         if (targetObjects == null || targetObjects.Length == 0)
         {
-            if (active) 
-            {
-                Debug.Log("[KeypadToggle] No targets, activating self");
-                gameObject.SetActive(true);
-            }
+            Debug.Log("[KeypadToggle] No targets, activating self");
+            gameObject.SetActive(true);
             return;
         }
         
-        // Otherwise toggle all specified targets
-        Debug.Log("[KeypadToggle] Toggling " + targetObjects.Length + " target objects");
+        // Otherwise enable all specified targets
+        Debug.Log("[KeypadToggle] Enabling " + targetObjects.Length + " target objects");
         for (int i = 0; i < targetObjects.Length; i++)
         {
             if (targetObjects[i] != null)
             {
-                Debug.Log("[KeypadToggle] Setting target[" + i + "] to " + active);
-                targetObjects[i].SetActive(active);
+                Debug.Log("[KeypadToggle] Enabling target[" + i + "]");
+                targetObjects[i].SetActive(true);
+            }
+            else
+            {
+                Debug.LogWarning("[KeypadToggle] Target[" + i + "] is null");
+            }
+        }
+    }
+    
+    // Disable objects
+    private void DisableObjects()
+    {
+        Debug.Log("[KeypadToggle] Disabling objects");
+        
+        // If no targets specified, do nothing (never disable self)
+        if (targetObjects == null || targetObjects.Length == 0)
+        {
+            Debug.Log("[KeypadToggle] No targets to disable");
+            return;
+        }
+        
+        // Otherwise disable all specified targets
+        Debug.Log("[KeypadToggle] Disabling " + targetObjects.Length + " target objects");
+        for (int i = 0; i < targetObjects.Length; i++)
+        {
+            if (targetObjects[i] != null)
+            {
+                Debug.Log("[KeypadToggle] Disabling target[" + i + "]");
+                targetObjects[i].SetActive(false);
             }
             else
             {
@@ -58,7 +81,7 @@ public class KeypadToggle : UdonSharpBehaviour
         
         if (!DisableKeypadGranted)
         {
-            SetTargetsActive(true);
+            EnableObjects();
         }
         else
         {
@@ -73,67 +96,80 @@ public class KeypadToggle : UdonSharpBehaviour
     
     public void _keypadAdditionalPasscode(int number)
     {
-        Debug.Log("[KeypadToggle] Additional passcode received: " + number);
+        Debug.Log("[KeypadToggle] _keypadAdditionalPasscode called with number: " + number);
         
-        // If no passcodes are set, behave like _keypadGranted
-        if (AdditionalPasscodeNumbers == null || AdditionalPasscodeNumbers.Length == 0)
+        // Log current AdditionalPasscodeNumbers array details
+        if(AdditionalPasscodeNumbers == null || AdditionalPasscodeNumbers.Length == 0)
         {
-            _keypadGranted();
+            Debug.Log("[KeypadToggle] No additional passcodes set, granting keypad");
+            EnableObjects();
             return;
         }
         
-        // First, check if it matches any value in the AdditionalPasscodeNumbers array
+        Debug.Log("[KeypadToggle] AdditionalPasscodeNumbers.Length = " + AdditionalPasscodeNumbers.Length);
+        for (int i = 0; i < AdditionalPasscodeNumbers.Length; i++)
+        {
+            Debug.Log("[KeypadToggle] AdditionalPasscodeNumbers[" + i + "] = " + AdditionalPasscodeNumbers[i]);
+        }
+        
         int matchedIndex = -1;
         for (int i = 0; i < AdditionalPasscodeNumbers.Length; i++)
         {
             if (AdditionalPasscodeNumbers[i] == number)
             {
                 matchedIndex = i;
-                Debug.Log("[KeypadToggle] Matched value " + number + " at index: " + matchedIndex);
+                Debug.Log("[KeypadToggle] Exact match found for value " + number + " at index: " + i);
                 break;
             }
         }
         
-        // If no match found by value, try to use the number as a direct index
-        if (matchedIndex < 0 && number >= 0 && number < AdditionalPasscodeNumbers.Length)
+        // Fallback: if no match found, force a fallback activation – this helps diagnose if the issue is matching
+        if (matchedIndex < 0)
         {
-            matchedIndex = number;
-            Debug.Log("[KeypadToggle] Using number as direct index: " + matchedIndex);
+            Debug.LogWarning("[KeypadToggle] No match found for passcode " + number + ". Forcing fallback activation.");
+            EnableObjects();
+            return;
         }
         
-        // Activate target based on the matched index
-        if (matchedIndex >= 0)
+        // If matched index is found, check targetObjects array
+        if (targetObjects != null && matchedIndex < targetObjects.Length && targetObjects[matchedIndex] != null)
         {
-            // If we have a matching target, activate just that one
-            if (targetObjects != null && matchedIndex < targetObjects.Length && targetObjects[matchedIndex] != null)
-            {
-                Debug.Log("[KeypadToggle] Activating specific target: " + targetObjects[matchedIndex].name);
-                targetObjects[matchedIndex].SetActive(true);
-            }
-            // Otherwise activate all targets
-            else if (targetObjects != null && targetObjects.Length > 0) 
-            {
-                Debug.Log("[KeypadToggle] No specific target for index, activating all targets");
-                SetTargetsActive(true);
-            }
-            // If no targets at all, activate self
-            else
-            {
-                Debug.Log("[KeypadToggle] No targets, activating self");
-                gameObject.SetActive(true);
-            }
+            Debug.Log("[KeypadToggle] Activating specific target: " + targetObjects[matchedIndex].name);
+            targetObjects[matchedIndex].SetActive(true);
+        }
+        else
+        {
+            Debug.LogWarning("[KeypadToggle] Matched index " + matchedIndex + " has no valid target. Activating all targets.");
+            EnableObjects();
         }
     }
     
     public void ExternalKeypadAdditionalPasscode(int passcode)
     {
+        Debug.Log("[KeypadToggle] ExternalKeypadAdditionalPasscode called with passcode: " + passcode);
         _keypadAdditionalPasscode(passcode);
     }
     
     public void _keypadClosed()
     {
         Debug.Log("[KeypadToggle] Keypad closed");
-        SetTargetsActive(false);
+        if (closeDelay >= 0f)
+        {
+            if (closeDelay > 0f)
+            {
+                Debug.Log("[KeypadToggle] Will disable objects after " + closeDelay + " seconds");
+                SendCustomEventDelayedSeconds("_DelayedDisableObjects", closeDelay);
+            }
+            else
+            {
+                Debug.Log("[KeypadToggle] Disabling objects immediately");
+                DisableObjects();
+            }
+        }
+        else
+        {
+            Debug.Log("[KeypadToggle] closeDelay is negative, not disabling objects");
+        }
     }
     
     public void ExternalKeypadClosed()
@@ -141,49 +177,18 @@ public class KeypadToggle : UdonSharpBehaviour
         _keypadClosed();
     }
 
-    private void HandleCorrectCode()
-    {
-        if (disableOnCorrect)
-        {
-            if (disableDelay > 0f)
-            {
-                SendCustomEventDelayedSeconds("_DelayedDisableObjects", disableDelay);
-            }
-            else
-            {
-                DisableObjects();
-            }
-        }
-        else
-        {
-            EnableObjects();
-        }
-    }
-    
     public void _DelayedDisableObjects()
     {
+        Debug.Log("[KeypadToggle] Executing delayed disable");
+        
+        // Extra safety check to avoid NullReferenceException
+        if (targetObjects == null)
+        {
+            Debug.LogError("[KeypadToggle] targetObjects array is null in _DelayedDisableObjects");
+            return;
+        }
+        
+        // Call the disable implementation
         DisableObjects();
-    }
-    
-    private void DisableObjects()
-    {
-        foreach (GameObject obj in targetObjects)
-        {
-            if (obj != null)
-            {
-                obj.SetActive(false);
-            }
-        }
-    }
-    
-    private void EnableObjects()
-    {
-        foreach (GameObject obj in targetObjects)
-        {
-            if (obj != null)
-            {
-                obj.SetActive(true);
-            }
-        }
     }
 }
