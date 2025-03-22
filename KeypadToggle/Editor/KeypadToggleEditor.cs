@@ -4,35 +4,49 @@ using UnityEngine;
 [CustomEditor(typeof(KeypadToggle))]
 public class KeypadToggleEditor : Editor
 {
-    private SerializedProperty targetObjectsProperty;
-    private SerializedProperty additionalPasscodeNumbersProperty;
-    private SerializedProperty disableKeypadGrantedProperty;
-    private SerializedProperty closeDelayProperty;
-
-    private void OnEnable()
-    {
-        targetObjectsProperty = serializedObject.FindProperty("targetObjects");
-        additionalPasscodeNumbersProperty = serializedObject.FindProperty("AdditionalPasscodeNumbers");
-        disableKeypadGrantedProperty = serializedObject.FindProperty("DisableKeypadGranted");
-        closeDelayProperty = serializedObject.FindProperty("closeDelay");
-    }
-    
     public override void OnInspectorGUI()
     {
-        serializedObject.Update();
-
-        EditorGUILayout.PropertyField(targetObjectsProperty, 
-            new GUIContent("Target Objects", "The objects to enable/disable when the keypad is triggered"), true);
+        KeypadToggle script = (KeypadToggle)target;
         
-        EditorGUILayout.PropertyField(additionalPasscodeNumbersProperty, 
-            new GUIContent("Additional Passcode Numbers", "Additional passcodes to be recognized"), true);
+        EditorGUILayout.Space();
+        EditorGUILayout.LabelField("KeypadToggle", EditorStyles.boldLabel);
+        EditorGUILayout.HelpBox(
+            "This component activates objects when a keypad is used and deactivates them when closed.\n\n" +
+            "• Target Objects: Objects to toggle on/off\n" +
+            "• Close Delay: Time before disabling objects (0=immediate, -1=never)", 
+            MessageType.Info);
         
-        EditorGUILayout.PropertyField(disableKeypadGrantedProperty, 
-            new GUIContent("Disable Keypad Granted", "If true, the keypad granted event will be ignored"));
+        EditorGUILayout.Space();
+        DrawDefaultInspector();
         
-        EditorGUILayout.PropertyField(closeDelayProperty,
-            new GUIContent("Close Delay (seconds)", "Delay in seconds before disabling objects after keypad is closed (0 = immediate, -1 = never disable)"));
+        // Testing section (only available in play mode)
+        EditorGUILayout.Space();
+        EditorGUILayout.LabelField("Testing", EditorStyles.boldLabel);
         
-        serializedObject.ApplyModifiedProperties();
+        EditorGUI.BeginDisabledGroup(!Application.isPlaying);
+        
+        EditorGUILayout.BeginHorizontal();
+        if (GUILayout.Button("Open Keypad (Activate)"))
+        {
+            script._keypadGranted();
+        }
+        if (GUILayout.Button("Close Keypad"))
+        {
+            script._keypadClosed();
+        }
+        EditorGUILayout.EndHorizontal();
+        
+        EditorGUILayout.BeginHorizontal();
+        if (GUILayout.Button("Force Activate"))
+        {
+            script.ForceActivate();
+        }
+        if (GUILayout.Button("Force Deactivate"))
+        {
+            script.ForceDeactivate();
+        }
+        EditorGUILayout.EndHorizontal();
+        
+        EditorGUI.EndDisabledGroup();
     }
 }
