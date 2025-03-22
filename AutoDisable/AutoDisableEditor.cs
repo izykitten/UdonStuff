@@ -13,7 +13,7 @@ using VRC.SDKBase.Editor.BuildPipeline;
 public static class AutoDisableManager  // RENAMED from AutoDisableEditor to AutoDisableManager
 {
     // Option to enable/disable debug logs
-    private static bool debugLogsEnabled = true;
+    internal static bool debugLogsEnabled = true;
 
     private static Dictionary<AutoDisable, bool> previousStates = new Dictionary<AutoDisable, bool>();
     private static Dictionary<AutoDisable, bool> occlusionPreviousStates = new Dictionary<AutoDisable, bool>();
@@ -288,6 +288,14 @@ public static class AutoDisableManager  // RENAMED from AutoDisableEditor to Aut
     public static void RestoreVRCBuildStates()
     {
         if (debugLogsEnabled) Debug.Log($"Restoring {vrcBuildPreviousStates.Count} object states after VRChat build");
+        
+        // Check if there are any states to restore
+        if (vrcBuildPreviousStates.Count == 0)
+        {
+            // Try to load states from EditorPrefs if dictionary is empty (might happen after domain reload)
+            LoadVRCStatesFromPrefs();
+        }
+        
         foreach (var kv in vrcBuildPreviousStates)
         {
             if (kv.Key != null)
@@ -303,7 +311,85 @@ public static class AutoDisableManager  // RENAMED from AutoDisableEditor to Aut
                 }
             }
         }
+        
+        // Clear stored states and prefs
         vrcBuildPreviousStates.Clear();
+        ClearVRCStatesFromPrefs();
+    }
+    
+    // Save VRC states to EditorPrefs to survive domain reloads
+    internal static void SaveVRCStatesToPrefs()
+    {
+        if (debugLogsEnabled) Debug.Log($"Saving {vrcBuildPreviousStates.Count} VRC states to EditorPrefs");
+        
+        // Record how many objects we have
+        EditorPrefs.SetInt("AutoDisable_VRCStateCount", vrcBuildPreviousStates.Count);
+        
+        int index = 0;
+        foreach (var kv in vrcBuildPreviousStates)
+        {
+            if (kv.Key != null && kv.Key.gameObject != null)
+            {
+                // Save the object path and active state
+                string objectId = GetObjectId(kv.Key.gameObject);
+                EditorPrefs.SetString($"AutoDisable_VRCState_{index}_Path", objectId);
+                EditorPrefs.SetBool($"AutoDisable_VRCState_{index}_Value", kv.Value);
+                index++;
+            }
+        }
+    }
+    
+    // Load VRC states from EditorPrefs
+    internal static void LoadVRCStatesFromPrefs()
+    {
+        int count = EditorPrefs.GetInt("AutoDisable_VRCStateCount", 0);
+        if (count == 0) return;
+        
+        if (debugLogsEnabled) Debug.Log($"Loading {count} VRC states from EditorPrefs");
+        
+        // Clear existing states
+        vrcBuildPreviousStates.Clear();
+        
+        // Find all AutoDisable components in the scene
+        var allComponents = Resources.FindObjectsOfTypeAll<AutoDisable>();
+        
+        // Create a lookup dictionary for quick object finding
+        Dictionary<string, AutoDisable> objectLookup = new Dictionary<string, AutoDisable>();
+        foreach (var comp in allComponents)
+        {
+            if (comp != null && comp.gameObject != null)
+            {
+                string id = GetObjectId(comp.gameObject);
+                objectLookup[id] = comp;
+            }
+        }
+        
+        // Load the saved states
+        for (int i = 0; i < count; i++)
+        {
+            string path = EditorPrefs.GetString($"AutoDisable_VRCState_{i}_Path", "");
+            bool value = EditorPrefs.GetBool($"AutoDisable_VRCState_{i}_Value", false);
+            
+            if (!string.IsNullOrEmpty(path) && objectLookup.TryGetValue(path, out AutoDisable comp))
+            {
+                vrcBuildPreviousStates[comp] = value;
+                if (debugLogsEnabled) Debug.Log($"Loaded state for {comp.gameObject.name}: {value}");
+            }
+        }
+    }
+    
+    // Clear VRC states from EditorPrefs
+    internal static void ClearVRCStatesFromPrefs()
+    {
+        int count = EditorPrefs.GetInt("AutoDisable_VRCStateCount", 0);
+        
+        for (int i = 0; i < count; i++)
+        {
+            EditorPrefs.DeleteKey($"AutoDisable_VRCState_{i}_Path");
+            EditorPrefs.DeleteKey($"AutoDisable_VRCState_{i}_Value");
+        }
+        
+        EditorPrefs.DeleteKey("AutoDisable_VRCStateCount");
     }
     
     // Add menu items to toggle debug logs
@@ -345,6 +431,9 @@ public class AutoDisableVRCBuildCallbacks : IVRCSDKBuildRequestedCallback
     // This method is called by the VRChat SDK before building
     public bool OnBuildRequested(VRCSDKRequestedBuildType requestedBuildType)
     {
+        if (AutoDisableManager.debugLogsEnabled) 
+            Debug.Log("VRChat build requested - saving states and disabling objects");
+        
         // Store previous states and disable objects
         var components = Resources.FindObjectsOfTypeAll<AutoDisable>();
         AutoDisableManager.vrcBuildPreviousStates.Clear();  // Updated reference
@@ -355,29 +444,61 @@ public class AutoDisableVRCBuildCallbacks : IVRCSDKBuildRequestedCallback
             comp.gameObject.SetActive(false);
         }
 
+        // Save states to EditorPrefs so they survive domain reloads
+        AutoDisableManager.SaveVRCStatesToPrefs();
+
         // Register for build completion events to restore states later
         EditorApplication.update += CheckBuildCompletion;
+        
+        // Also register for the playmode state change as a backup restoration point
+        EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
 
         // Return true to continue the build
         return true;
     }
     
-    private bool wasBuildingPlayer = false;
+    // Making this static to ensure it persists
+    private static bool wasBuildingPlayer = false;
     
-    // Method to check if build has completed or been cancelled
-    private void CheckBuildCompletion()
+    // Method to check if build has completed or been cancelled - made static
+    private static void CheckBuildCompletion()
     {
         bool isCurrentlyBuilding = BuildPipeline.isBuildingPlayer;
         
         // If we were building but now we've stopped (completed, failed, or cancelled)
         if (wasBuildingPlayer && !isCurrentlyBuilding)
         {
-            AutoDisableManager.RestoreVRCBuildStates();  // Updated reference
+            if (AutoDisableManager.debugLogsEnabled)
+                Debug.Log("VRChat build ended detected - restoring states");
+                
+            EditorApplication.delayCall += () => {
+                AutoDisableManager.RestoreVRCBuildStates();
+            };
+            
             // Unregister this update check
             EditorApplication.update -= CheckBuildCompletion;
+            EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
         }
         
         wasBuildingPlayer = isCurrentlyBuilding;
+    }
+    
+    // Additional restoration point if build triggers play mode changes
+    private static void OnPlayModeStateChanged(PlayModeStateChange state)
+    {
+        if (state == PlayModeStateChange.EnteredEditMode)
+        {
+            if (AutoDisableManager.debugLogsEnabled)
+                Debug.Log("Entered edit mode after VRChat build - restoring states");
+                
+            EditorApplication.delayCall += () => {
+                AutoDisableManager.RestoreVRCBuildStates();
+            };
+            
+            // Unregister callbacks
+            EditorApplication.update -= CheckBuildCompletion;
+            EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+        }
     }
 }
 
@@ -389,7 +510,12 @@ public class AutoDisableBuildPostprocessor : IPostprocessBuildWithReport
     public void OnPostprocessBuild(BuildReport report)
     {
         // Restore states after build is complete
-        AutoDisableManager.RestoreVRCBuildStates();  // Updated reference
+        if (AutoDisableManager.debugLogsEnabled)
+            Debug.Log("Build post-processor called - restoring states");
+            
+        EditorApplication.delayCall += () => {
+            AutoDisableManager.RestoreVRCBuildStates();
+        };
     }
 }
 
