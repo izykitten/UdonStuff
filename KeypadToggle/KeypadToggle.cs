@@ -10,8 +10,29 @@ public class KeypadToggle : UdonSharpBehaviour
     
     [SerializeField, Tooltip("Delay in seconds before disabling the object")]
     private float disableDelay = 0.0f;
+    
+    [SerializeField, Tooltip("Enable network syncing of object states")]
+    private bool networkSync = false;
 
     public void _keypadGranted()
+    {
+        if (networkSync)
+        {
+            Networking.SetOwner(Networking.LocalPlayer, gameObject);
+            SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, "NetworkedEnable");
+        }
+        else
+        {
+            EnableObjects();
+        }
+    }
+
+    public void NetworkedEnable()
+    {
+        EnableObjects();
+    }
+    
+    private void EnableObjects()
     {
         if (targetObjects != null && targetObjects.Length > 0)
         {
@@ -32,38 +53,42 @@ public class KeypadToggle : UdonSharpBehaviour
 
     public void _keypadClosed()
     {
-        if (targetObjects != null && targetObjects.Length > 0)
+        if (networkSync)
         {
+            Networking.SetOwner(Networking.LocalPlayer, gameObject);
             if (disableDelay > 0.0f)
             {
-                SendCustomEventDelayedSeconds("_DelayedDisable", disableDelay);
+                SendCustomEventDelayedSeconds("NetworkedDelayedDisable", disableDelay);
             }
             else
             {
-                foreach (GameObject obj in targetObjects)
-                {
-                    if (obj != null)
-                    {
-                        obj.SetActive(false);
-                    }
-                }
+                SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, "NetworkedDisable");
             }
         }
         else
         {
-            // Default to the GameObject this script is on
             if (disableDelay > 0.0f)
             {
                 SendCustomEventDelayedSeconds("_DelayedDisable", disableDelay);
             }
             else
             {
-                gameObject.SetActive(false);
+                DisableObjects();
             }
         }
     }
     
-    public void _DelayedDisable()
+    public void NetworkedDelayedDisable()
+    {
+        SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, "NetworkedDisable");
+    }
+    
+    public void NetworkedDisable()
+    {
+        DisableObjects();
+    }
+    
+    private void DisableObjects()
     {
         if (targetObjects != null && targetObjects.Length > 0)
         {
@@ -80,5 +105,10 @@ public class KeypadToggle : UdonSharpBehaviour
             // Default to the GameObject this script is on
             gameObject.SetActive(false);
         }
+    }
+    
+    public void _DelayedDisable()
+    {
+        DisableObjects();
     }
 }
